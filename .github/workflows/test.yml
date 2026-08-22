@@ -1,76 +1,71 @@
-name: test
+name: build-test
 
 on:
   push:
+    branches: ['**']
+    tags: ['*']
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build fat APE
-        run: bash ./build.sh
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sysperm-ape
-          path: sysperm.exe
-
-  linux:
-    needs: build
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: ubuntu-22.04
-            image: ubuntu:22.04
-            install: apt-get update && apt-get install -y acl passwd sudo libc-bin bash
-          - name: ubuntu-24.04
-            image: ubuntu:24.04
-            install: apt-get update && apt-get install -y acl passwd sudo libc-bin bash
-          - name: debian-12
-            image: debian:12
-            install: apt-get update && apt-get install -y acl passwd sudo libc-bin bash
-          - name: alpine-3.24
-            image: alpine:3.24
-            install: apk add --no-cache acl shadow sudo bash musl-utils
-          - name: almalinux-9
-            image: almalinux:9
-            install: dnf install -y acl shadow-utils sudo glibc-common bash
-          - name: opensuse-tumbleweed
-            image: opensuse/tumbleweed:latest
-            install: zypper --non-interactive install acl shadow sudo glibc bash
-    runs-on: ubuntu-latest
-    name: linux / ${{ matrix.name }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: sysperm-ape
-      - name: Exercise distro
-        run: |
-          docker run --rm --privileged             -v "$PWD:/work" -w /work             ${{ matrix.image }}             /bin/sh -lc '${{ matrix.install }} && chmod +x sysperm.exe tests/linux.sh && BIN=./sysperm.exe ./tests/linux.sh'
-
   macos:
-    needs: build
+    name: macOS / build + test
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: sysperm-ape
-      - name: Exercise users, groups, modes and ACLs
-        run: chmod +x sysperm.exe tests/macos.sh && BIN=./sysperm.exe ./tests/macos.sh
+      - name: Install GNU make
+        run: brew install make
+      - name: Build fat APE on macOS
+        run: bash ./build.sh
+      - name: Test macOS backend
+        run: chmod +x sysperm.exe tests/macos.sh && BIN=./sysperm.exe bash ./tests/macos.sh
 
   windows:
-    needs: build
+    name: Windows / WSL build + test
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - name: Install Ubuntu WSL
+        uses: Vampire/setup-wsl@v7
         with:
-          name: sysperm-ape
-      - name: Exercise users, groups and ACLs
+          distribution: Ubuntu-24.04
+          additional-packages: make unzip tar curl coreutils binutils
+      - name: Build fat APE in WSL
+        shell: wsl-bash {0}
+        run: bash ./build.sh
+      - name: Test Windows backend
         shell: pwsh
-        run: $env:BIN = (Resolve-Path .\sysperm.exe); .\tests\windows.ps1
+        run: |
+          $env:BIN = (Resolve-Path .\sysperm.exe)
+          .\tests\windows.ps1
+
+  linux:
+    name: Linux / build + host + distro families
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ubuntu test dependencies
+        run: sudo apt-get update && sudo apt-get install -y acl passwd sudo libc-bin bash
+      - name: Build fat APE on Linux
+        run: bash ./build.sh
+      - name: Test Ubuntu runner backend
+        run: chmod +x sysperm.exe tests/linux.sh && BIN=./sysperm.exe bash ./tests/linux.sh
+      - name: Test Linux distro families with Docker
+        run: chmod +x tests/linux-docker.sh && bash ./tests/linux-docker.sh
+      - name: Prepare release executable
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          chmod 0755 sysperm.exe
+          tar -czf sysperm.exe.tar.gz sysperm.exe
+      - name: Create or update tag release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes
+          gh release upload "$TAG" sysperm.exe sysperm.exe.tar.gz --clobber

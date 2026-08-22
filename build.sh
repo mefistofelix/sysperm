@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Windows: run this script from WSL, e.g.:
 #   wsl.exe --cd "%CD%" bash ./build.sh
+# Linux/macOS: run directly:
+#   bash ./build.sh
 set -euo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -15,7 +17,8 @@ OUT="$ROOT/sysperm.exe"
 
 COSMOCC_URL="https://cosmo.zip/pub/cosmos/zip/cosmocc.zip"
 COSMO_SOURCE_URL="https://github.com/jart/cosmopolitan/archive/refs/heads/master.tar.gz"
-JOBS=${JOBS:-$(nproc 2>/dev/null || printf '4')}
+HOST_OS=$(uname -s 2>/dev/null || true)
+JOBS=${JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || printf '4')}
 
 fail() {
   printf 'build.sh: %s\n' "$*" >&2
@@ -48,16 +51,23 @@ fetch() {
   fi
 }
 
-[ "$(uname -s 2>/dev/null || true)" = Linux ] || fail "this build script requires Linux"
+case "$HOST_OS" in
+  Linux) MAKE_CMD=${MAKE:-make} ;;
+  Darwin) MAKE_CMD=${MAKE:-gmake} ;;
+  *) fail "unsupported build host: $HOST_OS (use WSL on Windows)" ;;
+esac
 
 IS_WSL=0
-case "$(uname -r 2>/dev/null || true)" in
-  *[Mm]icrosoft*|*WSL*) IS_WSL=1 ;;
-esac
+if [ "$HOST_OS" = Linux ]; then
+  case "$(uname -r 2>/dev/null || true)" in
+    *[Mm]icrosoft*|*WSL*) IS_WSL=1 ;;
+  esac
+fi
 
 need tar
 need unzip
-need make
+need "$MAKE_CMD"
+need find
 if [ "$IS_WSL" -eq 1 ]; then
   need install
   need cmp
@@ -66,7 +76,7 @@ fi
 mkdir -p "$BUILD" "$TMP"
 
 # WSL's Windows-executable interop can steal Cosmopolitan APE helper launches.
-# These workarounds are intentionally no-ops on normal Linux.
+# These workarounds are intentionally no-ops on normal Linux and macOS.
 if [ "$IS_WSL" -eq 1 ]; then
   INTEROP=/proc/sys/fs/binfmt_misc/WSLInterop
   if [ -e "$INTEROP" ] && grep -q '^enabled' "$INTEROP" 2>/dev/null; then
@@ -86,13 +96,21 @@ if [ ! -x "$COSMOCC/bin/cosmocc" ]; then
   printf 'Downloading cosmocc...\n'
   fetch "$COSMOCC_URL" "$archive"
   unzip -q "$archive" -d "$unpack"
-  [ -x "$unpack/bin/cosmocc" ] || fail "unexpected cosmocc.zip layout"
+
+  toolroot="$unpack"
+  if [ ! -f "$toolroot/bin/cosmocc" ]; then
+    candidate=$(find "$unpack" -type f -path '*/bin/cosmocc' -print -quit)
+    [ -n "$candidate" ] || fail "unexpected cosmocc.zip layout"
+    toolroot=$(cd -- "$(dirname -- "$candidate")/.." && pwd)
+  fi
+
   rm -rf "$COSMOCC"
-  mv "$unpack" "$COSMOCC"
+  mv "$toolroot" "$COSMOCC"
+  chmod +x "$COSMOCC/bin/cosmocc"
+  [ -x "$COSMOCC/bin/cosmocc" ] || fail "cosmocc driver is not executable"
 fi
 
-# WSL also needs a native APE loader after WSLInterop is disabled. Normal Linux
-# can use Cosmopolitan's normal self-extracting loader path without root access.
+# WSL also needs a native APE loader after WSLInterop is disabled.
 if [ "$IS_WSL" -eq 1 ]; then
   case "$(uname -m)" in
     x86_64|amd64) APE="$COSMOCC/bin/ape-x86_64.elf" ;;
@@ -101,16 +119,11 @@ if [ "$IS_WSL" -eq 1 ]; then
   esac
   [ -f "$APE" ] || fail "cosmocc archive is missing $(basename "$APE")"
   if [ ! -x /usr/bin/ape ] || ! cmp -s "$APE" /usr/bin/ape; then
-    if [ "$(id -u)" -eq 0 ]; then
-      install -m 0755 "$APE" /usr/bin/ape
-    else
-      as_root install -m 0755 "$APE" /usr/bin/ape
-    fi
+    as_root install -m 0755 "$APE" /usr/bin/ape
   fi
 fi
 
-# Keep downloaded Cosmopolitan source isolated under build/. This is the same
-# WSL-safe build layout used by ape-run.
+# Keep downloaded Cosmopolitan source isolated under build/.
 if [ ! -f "$COSMO_SRC/Makefile" ]; then
   archive="$TMP/cosmopolitan-master.tar.gz"
   unpack="$TMP/cosmopolitan.unpack"
@@ -136,13 +149,13 @@ cp "$ROOT/src/main.c" "$COSMO_APP"
 printf 'Building sysperm slice (x86_64)...\n'
 (
   cd "$COSMO_SRC"
-  make SHELL=/bin/bash -j"$JOBS" o//examples/sysperm.dbg
+  "$MAKE_CMD" SHELL=/bin/bash -j"$JOBS" o//examples/sysperm.dbg
 )
 
 printf 'Building sysperm slice (arm64)...\n'
 (
   cd "$COSMO_SRC"
-  make SHELL=/bin/bash -j"$JOBS" MODE=aarch64 o/aarch64/examples/sysperm.dbg
+  "$MAKE_CMD" SHELL=/bin/bash -j"$JOBS" MODE=aarch64 o/aarch64/examples/sysperm.dbg
 )
 
 [ -f "$X86_DBG" ] || fail "missing x86_64 linked slice"
@@ -159,5 +172,5 @@ printf 'Fat-linking sysperm.exe...\n'
   "$ARM_DBG"
 "$COSMOCC/bin/pecheck" "$OUT"
 
-chmod +x "$OUT"
+chmod 0755 "$OUT"
 printf 'Built %s\n' "$OUT"
