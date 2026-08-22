@@ -15,6 +15,13 @@
 #include <unistd.h>
 
 #include "libc/dce.h"
+#include "libc/nt/accounting.h"
+#include "libc/nt/dll.h"
+#include "libc/nt/process.h"
+#include "libc/nt/runtime.h"
+#include "libc/nt/synchronization.h"
+#include "libc/nt/thunk/msabi.h"
+#include "libc/x/x.h"
 
 extern char **environ;
 
@@ -610,12 +617,103 @@ static int acl_walk(Os os, const char *path, const char *expr, bool recursive) {
   return rc;
 }
 
-static int run_as_user(Os os, const char *user, char **command) {
-  if (!command[0]) return 2;
-  if (os == OS_WINDOWS) {
-    fprintf(stderr, "sysperm: Windows exec requires native logon support\n");
+static bool win_needs_quotes(const char *s) {
+  if (!*s) return true;
+  for (; *s; ++s) if (*s == ' ' || *s == '\t' || *s == '"') return true;
+  return false;
+}
+
+static char *win_command_line(char **argv) {
+  size_t cap = 1;
+  for (int i = 0; argv[i]; ++i) cap += strlen(argv[i]) * 2 + 4;
+  char *out = malloc(cap);
+  if (!out) return NULL;
+  char *p = out;
+  for (int i = 0; argv[i]; ++i) {
+    if (i) *p++ = ' ';
+    const char *s = argv[i];
+    bool quote = win_needs_quotes(s);
+    if (quote) *p++ = '"';
+    unsigned slashes = 0;
+    for (;;) {
+      char c = *s++;
+      if (c == '\\') { ++slashes; continue; }
+      if (c == '"') {
+        for (unsigned j = 0; j < slashes * 2 + 1; ++j) *p++ = '\\';
+        *p++ = '"';
+        slashes = 0;
+        continue;
+      }
+      if (!c) {
+        for (unsigned j = 0; j < slashes * (quote ? 2 : 1); ++j) *p++ = '\\';
+        break;
+      }
+      while (slashes--) *p++ = '\\';
+      slashes = 0;
+      *p++ = c;
+    }
+    if (quote) *p++ = '"';
+  }
+  *p = 0;
+  return out;
+}
+
+typedef int32_t (__msabi *CreateProcessWithLogonWFn)(
+    const char16_t *, const char16_t *, const char16_t *, uint32_t,
+    const char16_t *, char16_t *, uint32_t, void *, const char16_t *,
+    struct NtStartupInfo *, struct NtProcessInformation *);
+
+static int windows_run_as_user(const char *user, const char *password, char **command) {
+  if (!password) {
+    fprintf(stderr, "sysperm: Windows exec requires -p PASSWORD\n");
     return 2;
   }
+  int64_t advapi = LoadLibraryA("advapi32.dll");
+  CreateProcessWithLogonWFn create = advapi ? (CreateProcessWithLogonWFn)GetProcAddress(advapi, "CreateProcessWithLogonW") : NULL;
+  if (!create) {
+    fprintf(stderr, "sysperm: Windows native logon API is unavailable\n");
+    return 127;
+  }
+  char *cmd8 = win_command_line(command);
+  if (!cmd8) return 2;
+  char16_t *u16 = utf8to16(user, strlen(user), NULL);
+  char16_t *p16 = utf8to16(password, strlen(password), NULL);
+  char16_t *c16 = utf8to16(cmd8, strlen(cmd8), NULL);
+  free(cmd8);
+  if (!u16 || !p16 || !c16) { free(u16); free(p16); free(c16); return 2; }
+  struct NtStartupInfo si = {0};
+  struct NtProcessInformation pi = {0};
+  si.cb = sizeof(si);
+  si.dwFlags = 0x00000100; /* STARTF_USESTDHANDLES */
+  si.hStdInput = GetStdHandle((uint32_t)-10);
+  si.hStdOutput = GetStdHandle((uint32_t)-11);
+  si.hStdError = GetStdHandle((uint32_t)-12);
+  if (verbose) print_command(command);
+  int32_t ok = create(u16, u".", p16, 0, NULL, c16, 0, NULL, NULL, &si, &pi);
+  free(u16); free(p16); free(c16);
+  if (!ok) {
+    uint32_t e = GetLastError();
+    if (e == 1326) fprintf(stderr, "sysperm: exec failed: invalid username or password\n");
+    else if (e == 1385) fprintf(stderr, "sysperm: exec failed: this account is not allowed to log on this way\n");
+    else if (e == 5) fprintf(stderr, "sysperm: exec failed: access denied\n");
+    else fprintf(stderr, "sysperm: exec failed: Windows error %u\n", e);
+    return e > 255 ? 1 : (int)e;
+  }
+  CloseHandle(pi.hThread);
+  if (WaitForSingleObject(pi.hProcess, 0xffffffffu) == 0xffffffffu) {
+    CloseHandle(pi.hProcess);
+    fprintf(stderr, "sysperm: exec failed while waiting for child process\n");
+    return 1;
+  }
+  uint32_t code = 1;
+  if (!GetExitCodeProcess(pi.hProcess, &code)) code = 1;
+  CloseHandle(pi.hProcess);
+  return code > 255 ? 1 : (int)code;
+}
+
+static int run_as_user(Os os, const char *user, const char *password, char **command) {
+  if (!command[0]) return 2;
+  if (os == OS_WINDOWS) return windows_run_as_user(user, password, command);
   struct passwd *pw = getpwnam(user);
   uid_t uid;
   gid_t gid;
@@ -674,7 +772,7 @@ static void usage(FILE *f) {
     "  sysperm user NAME [-g GROUP,...] [-pg GROUP] [-p TEXT] [--home PATH] [--shell PATH] [--uid N] [--absent]\n"
     "  sysperm group NAME [--absent] [--gid N]\n"
     "  sysperm perm PATH EXPR... [--no-recursive] [--no-setgid]\n"
-    "  sysperm exec USER -- COMMAND [ARG...]\n"
+    "  sysperm exec USER [-p PASSWORD] -- COMMAND [ARG...]\n"
     "  sysperm os\n\n"
     "Global options:\n"
     "  -v, --verbose                 show native commands and their output\n\n"
@@ -762,8 +860,16 @@ int main(int argc, char **argv) {
   }
 
   if (!strcmp(argv[1], "exec")) {
-    if (argc < 5 || strcmp(argv[3], "--")) { usage(stderr); return 2; }
-    return run_as_user(os, argv[2], &argv[4]);
+    if (argc < 5) { usage(stderr); return 2; }
+    const char *password = NULL;
+    int i = 3;
+    while (i < argc && strcmp(argv[i], "--")) {
+      if (!strcmp(argv[i], "-p") || !strcmp(argv[i], "--password")) password = need_arg(argc, argv, &i, argv[i]);
+      else { fprintf(stderr, "sysperm: unknown exec option %s\n", argv[i]); return 2; }
+      ++i;
+    }
+    if (i >= argc - 1 || strcmp(argv[i], "--")) { usage(stderr); return 2; }
+    return run_as_user(os, argv[2], password, &argv[i + 1]);
   }
 
   if (!strcmp(argv[1], "perm")) {
