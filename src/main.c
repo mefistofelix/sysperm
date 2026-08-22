@@ -616,15 +616,27 @@ static int run_as_user(Os os, const char *user, char **command) {
     fprintf(stderr, "sysperm: Windows exec requires native logon support\n");
     return 2;
   }
-  struct passwd *pw = NULL;
-  for (int i = 0; i < (os == OS_MACOS ? 10 : 1) && !pw; ++i) {
-    pw = getpwnam(user);
-    if (!pw && os == OS_MACOS) sleep(1);
-  }
-  if (!pw) { fprintf(stderr, "sysperm: local user %s was not found\n", user); return 2; }
-  if (initgroups(pw->pw_name, pw->pw_gid)) { perror("sysperm: initgroups"); return 1; }
-  if (setgid(pw->pw_gid)) { perror("sysperm: setgid"); return 1; }
-  if (setuid(pw->pw_uid)) { perror("sysperm: setuid"); return 1; }
+  struct passwd *pw = getpwnam(user);
+  uid_t uid;
+  gid_t gid;
+  const char *name = user;
+  if (pw) {
+    uid = pw->pw_uid;
+    gid = pw->pw_gid;
+    name = pw->pw_name;
+  } else if (os == OS_MACOS) {
+    char node[512], out[256];
+    snprintf(node, sizeof(node), "/Users/%s", user);
+    char *uidav[] = {"dscl", ".", "-read", node, "UniqueID", NULL};
+    if (spawn_capture(uidav, out, sizeof(out))) { fprintf(stderr, "sysperm: local user %s was not found\n", user); return 2; }
+    char *p = strrchr(out, ' '); if (!p) return 2; uid = (uid_t)strtoul(p + 1, NULL, 10);
+    char *gidav[] = {"dscl", ".", "-read", node, "PrimaryGroupID", NULL};
+    if (spawn_capture(gidav, out, sizeof(out))) return 2;
+    p = strrchr(out, ' '); if (!p) return 2; gid = (gid_t)strtoul(p + 1, NULL, 10);
+  } else { fprintf(stderr, "sysperm: local user %s was not found\n", user); return 2; }
+  if (initgroups(name, gid)) { perror("sysperm: initgroups"); return 1; }
+  if (setgid(gid)) { perror("sysperm: setgid"); return 1; }
+  if (setuid(uid)) { perror("sysperm: setuid"); return 1; }
   execvp(command[0], command);
   fprintf(stderr, "sysperm: cannot exec %s: %s\n", command[0], strerror(errno));
   return 127;
