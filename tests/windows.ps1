@@ -3,11 +3,13 @@ $bin = if ($env:BIN) { $env:BIN } else { '.\sysperm.exe' }
 $user = 'sysperm_ci_user'
 $group = 'sysperm_ci_group'
 $root = Join-Path $env:TEMP ('sysperm-ci-' + $PID)
+$whoFile = Join-Path $env:PUBLIC ('sysperm-ci-' + $PID + '-who.txt')
 
 function Cleanup {
   & $bin user $user --absent 2>$null | Out-Null
   & $bin group $group --absent 2>$null | Out-Null
   Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
+  Remove-Item -Force $whoFile -ErrorAction SilentlyContinue
 }
 
 try {
@@ -19,8 +21,11 @@ try {
   $members = net localgroup $group
   if (-not ($members -match $user)) { throw 'membership missing' }
 
-  $who = (& $bin -v exec $user -p 'Sysperm-CI8!Next' -- cmd.exe /d /c 'echo %USERNAME%').Trim()
-  if ($LASTEXITCODE -ne 0 -or $who -ne $user) { throw "impersonated exec identity failed: $who" }
+  $whoCmd = "echo %USERNAME% > `"$whoFile`""
+  & $bin -v exec $user -p 'Sysperm-CI8!Next' -- cmd.exe /d /c $whoCmd
+  if ($LASTEXITCODE -ne 0) { throw "impersonated exec launch failed: $LASTEXITCODE" }
+  $who = (Get-Content $whoFile -Raw).Trim()
+  if ($who -ne $user) { throw "impersonated exec identity failed: $who" }
   & $bin exec $user -p 'Sysperm-CI8!Next' -- cmd.exe /d /c 'exit 23'
   if ($LASTEXITCODE -ne 23) { throw "impersonated exec exit code failed: $LASTEXITCODE" }
 

@@ -695,10 +695,6 @@ static int windows_run_as_user(const char *user, const char *password, char **co
   struct NtStartupInfo si = {0};
   struct NtProcessInformation pi = {0};
   si.cb = sizeof(si);
-  si.dwFlags = 0x00000100u; /* STARTF_USESTDHANDLES */
-  si.hStdInput = GetStdHandle(0xfffffff6u);
-  si.hStdOutput = GetStdHandle(0xfffffff5u);
-  si.hStdError = GetStdHandle(0xfffffff4u);
   if (verbose) print_command(command);
   int32_t ok = create(u16, u".", p16, 0, NULL, c16, 0x08000000u,
                       NULL, NULL, &si, &pi);
