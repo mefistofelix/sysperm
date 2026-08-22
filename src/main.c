@@ -616,7 +616,11 @@ static int run_as_user(Os os, const char *user, char **command) {
     fprintf(stderr, "sysperm: Windows exec requires native logon support\n");
     return 2;
   }
-  struct passwd *pw = getpwnam(user);
+  struct passwd *pw = NULL;
+  for (int i = 0; i < (os == OS_MACOS ? 10 : 1) && !pw; ++i) {
+    pw = getpwnam(user);
+    if (!pw && os == OS_MACOS) sleep(1);
+  }
   if (!pw) { fprintf(stderr, "sysperm: local user %s was not found\n", user); return 2; }
   if (initgroups(pw->pw_name, pw->pw_gid)) { perror("sysperm: initgroups"); return 1; }
   if (setgid(pw->pw_gid)) { perror("sysperm: setgid"); return 1; }
