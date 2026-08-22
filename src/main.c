@@ -668,12 +668,10 @@ static char16_t *utf8to16z(const char *s) {
   return q;
 }
 
-typedef int32_t (*LogonUserWFn)(const char16_t *, const char16_t *,
-                                const char16_t *, uint32_t, uint32_t,
-                                int64_t *);
-typedef int32_t (*CreateProcessWithTokenWFn)(
-    int64_t, uint32_t, const char16_t *, char16_t *, uint32_t, void *,
-    const char16_t *, struct NtStartupInfo *, struct NtProcessInformation *);
+typedef int32_t (*CreateProcessWithLogonWFn)(
+    const char16_t *, const char16_t *, const char16_t *, uint32_t,
+    const char16_t *, char16_t *, uint32_t, void *, const char16_t *,
+    struct NtStartupInfo *, struct NtProcessInformation *);
 
 static int windows_run_as_user(const char *user, const char *password, char **command) {
   if (!password) {
@@ -681,12 +679,10 @@ static int windows_run_as_user(const char *user, const char *password, char **co
     return 2;
   }
   void *advapi = cosmo_dlopen("advapi32.dll", RTLD_LAZY);
-  void *raw_logon = advapi ? cosmo_dlsym(advapi, "LogonUserW") : NULL;
-  void *raw_create = advapi ? cosmo_dlsym(advapi, "CreateProcessWithTokenW") : NULL;
-  LogonUserWFn logon = raw_logon ? (LogonUserWFn)cosmo_dltramp(raw_logon) : NULL;
-  CreateProcessWithTokenWFn create = raw_create ? (CreateProcessWithTokenWFn)cosmo_dltramp(raw_create) : NULL;
-  if (!logon || !create) {
-    fprintf(stderr, "sysperm: Windows native logon/process APIs are unavailable\n");
+  void *raw_create = advapi ? cosmo_dlsym(advapi, "CreateProcessWithLogonW") : NULL;
+  CreateProcessWithLogonWFn create = raw_create ? (CreateProcessWithLogonWFn)cosmo_dltramp(raw_create) : NULL;
+  if (!create) {
+    fprintf(stderr, "sysperm: Windows native alternate-user process API is unavailable\n");
     return 127;
   }
   char *cmd8 = win_command_line(command);
@@ -696,18 +692,6 @@ static int windows_run_as_user(const char *user, const char *password, char **co
   char16_t *c16 = utf8to16z(cmd8);
   free(cmd8);
   if (!u16 || !p16 || !c16) { free(u16); free(p16); free(c16); return 2; }
-  int64_t token = 0;
-  int32_t ok = logon(u16, u".", p16, 2, 0, &token); /* INTERACTIVE, DEFAULT */
-  uint32_t logon_error = ok ? 0 : GetLastError();
-  if (verbose) fprintf(stderr, "sysperm: LogonUserW ok=%d token=%lld error=%u\n", ok, (long long)token, logon_error);
-  if (!ok) {
-    free(u16); free(p16); free(c16);
-    if (logon_error == 1326) fprintf(stderr, "sysperm: exec failed: invalid username or password\n");
-    else if (logon_error == 1385) fprintf(stderr, "sysperm: exec failed: this account is not allowed to log on this way\n");
-    else if (logon_error == 5) fprintf(stderr, "sysperm: exec failed: access denied\n");
-    else fprintf(stderr, "sysperm: exec failed during Windows logon: error %u\n", logon_error);
-    return logon_error > 255 ? 1 : (int)logon_error;
-  }
   struct NtStartupInfo si = {0};
   struct NtProcessInformation pi = {0};
   si.cb = sizeof(si);
@@ -716,14 +700,15 @@ static int windows_run_as_user(const char *user, const char *password, char **co
   si.hStdOutput = GetStdHandle(0xfffffff5u);
   si.hStdError = GetStdHandle(0xfffffff4u);
   if (verbose) print_command(command);
-  ok = create(token, 0, NULL, c16, 0x08000000u, NULL, NULL, &si, &pi);
+  int32_t ok = create(u16, u".", p16, 0, NULL, c16, 0x08000000u,
+                      NULL, NULL, &si, &pi);
   uint32_t create_error = ok ? 0 : GetLastError();
-  if (verbose) fprintf(stderr, "sysperm: CreateProcessWithTokenW ok=%d process=%lld thread=%lld error=%u\n", ok, (long long)pi.hProcess, (long long)pi.hThread, create_error);
+  if (verbose) fprintf(stderr, "sysperm: CreateProcessWithLogonW ok=%d process=%lld thread=%lld error=%u\n", ok, (long long)pi.hProcess, (long long)pi.hThread, create_error);
   free(u16); free(p16); free(c16);
-  CloseHandle(token);
   if (!ok) {
     uint32_t e = create_error;
-    if (e == 1314) fprintf(stderr, "sysperm: exec failed: process lacks the Windows privilege required to launch with another user's token\n");
+    if (e == 1326) fprintf(stderr, "sysperm: exec failed: invalid username or password\n");
+    else if (e == 1385) fprintf(stderr, "sysperm: exec failed: this account is not allowed to log on interactively\n");
     else if (e == 5) fprintf(stderr, "sysperm: exec failed: access denied\n");
     else fprintf(stderr, "sysperm: exec failed during Windows process creation: error %u\n", e);
     return e > 255 ? 1 : (int)e;
