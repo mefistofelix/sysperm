@@ -18,6 +18,9 @@
 #include "libc/dlopen/dlfcn.h"
 #include "libc/nt/accounting.h"
 #include "libc/nt/dll.h"
+#include "libc/nt/enum/accessmask.h"
+#include "libc/nt/files.h"
+#include "libc/nt/privilege.h"
 #include "libc/nt/process.h"
 #include "libc/nt/runtime.h"
 #include "libc/nt/synchronization.h"
@@ -676,6 +679,24 @@ typedef int32_t (*CreateProcessAsUserWFn)(
     void *, const char16_t *, struct NtStartupInfo *,
     struct NtProcessInformation *);
 
+static bool enable_windows_privilege(const char16_t *name) {
+  int64_t token = 0;
+  if (!OpenProcessToken(GetCurrentProcess(),
+                        kNtTokenAdjustPrivileges | kNtTokenQuery, &token)) return false;
+  struct NtTokenPrivileges tp = {0};
+  tp.PrivilegeCount = 1;
+  if (!LookupPrivilegeValue(NULL, name, &tp.Privileges[0].Luid)) {
+    CloseHandle(token);
+    return false;
+  }
+  tp.Privileges[0].Attributes = kNtSePrivilegeEnabled;
+  SetLastError(0);
+  bool ok = AdjustTokenPrivileges(token, false, &tp, 0, NULL, NULL);
+  uint32_t e = GetLastError();
+  CloseHandle(token);
+  return ok && e == 0;
+}
+
 static int windows_run_as_user(const char *user, const char *password, char **command) {
   if (!password) {
     fprintf(stderr, "sysperm: Windows exec requires -p PASSWORD\n");
@@ -709,6 +730,9 @@ static int windows_run_as_user(const char *user, const char *password, char **co
     else fprintf(stderr, "sysperm: exec failed during Windows logon: error %u\n", logon_error);
     return logon_error > 255 ? 1 : (int)logon_error;
   }
+  bool quota = enable_windows_privilege(u"SeIncreaseQuotaPrivilege");
+  bool assign = enable_windows_privilege(u"SeAssignPrimaryTokenPrivilege");
+  if (verbose) fprintf(stderr, "sysperm: Windows privileges increase-quota=%d assign-primary-token=%d\n", quota, assign);
   struct NtStartupInfo si = {0};
   struct NtProcessInformation pi = {0};
   si.cb = sizeof(si);
