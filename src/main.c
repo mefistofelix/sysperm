@@ -775,7 +775,10 @@ static int windows_run_as_user(const char *user, const char *password, char **co
   if (!GetExitCodeProcess(pi.hProcess, &code)) code = 1;
   if (verbose) fprintf(stderr, "sysperm: child exit code %u\n", code);
   CloseHandle(pi.hProcess);
-  return code > 255 ? 1 : (int)code;
+  /* Cosmopolitan's normal process return is encoded like a POSIX wait status
+     on Windows. Alternate-user exec must expose the child's native Windows
+     exit code verbatim, so terminate through the Win32 API instead. */
+  ExitProcess(code);
 }
 
 static int run_as_user(Os os, const char *user, const char *password, char **command) {
