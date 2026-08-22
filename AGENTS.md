@@ -54,7 +54,7 @@ Do not silently weaken requested ACL semantics. If one platform cannot faithfull
 
 On Windows, run the build through WSL. The script contains the canonical invocation comment at its top. Do not replace this with a native Windows cosmocc invocation unless it has been demonstrated to work with the same fat x86_64+aarch64 output.
 
-The build downloads the official current `cosmocc.zip` from `cosmo.zip`, downloads upstream Cosmopolitan source when necessary, builds both x86_64 and aarch64 linked slices, and combines them with `apelink` into `sysperm.exe`.
+The build downloads the official current `cosmocc.zip` from `cosmo.zip` and invokes the `cosmocc` fat compiler directly. `cosmocc` builds both x86_64 and aarch64 slices and combines them with `apelink` into `sysperm.exe`; do not rebuild the full Cosmopolitan source tree for this project.
 
 The final executable keeps the `.exe` suffix on every operating system.
 

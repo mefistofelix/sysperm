@@ -70,7 +70,7 @@ This avoids trying to write through NSS on Linux and keeps the implementation al
 
 ## Build
 
-The build follows the same WSL-safe Cosmopolitan approach used by the `ape-run` project. All compiler/upstream material is downloaded into the ignored `build/` directory.
+The build follows the same WSL-safe Cosmopolitan approach used by the `ape-run` project. The official compiler toolchain is downloaded into the ignored `build/` directory; the full Cosmopolitan source tree is not rebuilt.
 
 On Windows, run:
 
@@ -101,10 +101,10 @@ The local matrix currently targets Ubuntu and Debian when installed. Under WSL i
 `build.sh` downloads the official current Cosmopolitan compiler archive from:
 
 ```text
-https://cosmo.zip/pub/cosmos/zip/cosmocc.zip
+https://cosmo.zip/pub/cosmocc/cosmocc.zip
 ```
 
-It then builds x86_64 and aarch64 slices against upstream Cosmopolitan and fat-links them into:
+It invokes `cosmocc` directly on `src/main.c`; the driver builds the x86_64 and aarch64 slices and fat-links them into:
 
 ```text
 sysperm.exe

@@ -9,16 +9,9 @@ ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 BUILD="$ROOT/build"
 TMP="$BUILD/tmp"
 COSMOCC="$BUILD/cosmocc"
-COSMO_SRC="$BUILD/cosmopolitan-src"
-COSMO_APP="$COSMO_SRC/examples/sysperm.c"
-X86_DBG="$COSMO_SRC/o/x86_64/examples/sysperm.dbg"
-ARM_DBG="$COSMO_SRC/o/aarch64/examples/sysperm.dbg"
 OUT="$ROOT/sysperm.exe"
-
 COSMOCC_URL="https://cosmo.zip/pub/cosmocc/cosmocc.zip"
-COSMO_SOURCE_URL="https://github.com/jart/cosmopolitan/archive/refs/heads/master.tar.gz"
 HOST_OS=$(uname -s 2>/dev/null || true)
-JOBS=${JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || printf '4')}
 
 fail() {
   printf 'build.sh: %s\n' "$*" >&2
@@ -52,8 +45,7 @@ fetch() {
 }
 
 case "$HOST_OS" in
-  Linux) MAKE_CMD=${MAKE:-make} ;;
-  Darwin) MAKE_CMD=${MAKE:-gmake} ;;
+  Linux|Darwin) ;;
   *) fail "unsupported build host: $HOST_OS (use WSL on Windows)" ;;
 esac
 
@@ -64,9 +56,7 @@ if [ "$HOST_OS" = Linux ]; then
   esac
 fi
 
-need tar
 need unzip
-need "$MAKE_CMD"
 need find
 if [ "$IS_WSL" -eq 1 ]; then
   need install
@@ -76,7 +66,7 @@ fi
 mkdir -p "$BUILD" "$TMP"
 
 # WSL's Windows-executable interop can steal Cosmopolitan APE helper launches.
-# These workarounds are intentionally no-ops on normal Linux and macOS.
+# Disable it for this WSL instance and install Cosmopolitan's native APE loader.
 if [ "$IS_WSL" -eq 1 ]; then
   INTEROP=/proc/sys/fs/binfmt_misc/WSLInterop
   if [ -e "$INTEROP" ] && grep -q '^enabled' "$INTEROP" 2>/dev/null; then
@@ -110,7 +100,9 @@ if [ ! -x "$COSMOCC/bin/cosmocc" ]; then
   [ -x "$COSMOCC/bin/cosmocc" ] || fail "cosmocc driver is not executable"
 fi
 
-# WSL also needs a native APE loader after WSLInterop is disabled.
+# GCC/binutils helpers spawned by cosmocc locate sibling tools such as cc1/ld via PATH.
+export PATH="$COSMOCC/bin:$PATH"
+
 if [ "$IS_WSL" -eq 1 ]; then
   case "$(uname -m)" in
     x86_64|amd64) APE="$COSMOCC/bin/ape-x86_64.elf" ;;
@@ -123,54 +115,7 @@ if [ "$IS_WSL" -eq 1 ]; then
   fi
 fi
 
-# Keep downloaded Cosmopolitan source isolated under build/.
-if [ ! -f "$COSMO_SRC/Makefile" ]; then
-  archive="$TMP/cosmopolitan-master.tar.gz"
-  unpack="$TMP/cosmopolitan.unpack"
-  rm -rf "$unpack"
-  mkdir -p "$unpack"
-  printf 'Downloading Cosmopolitan source...\n'
-  fetch "$COSMO_SOURCE_URL" "$archive"
-  tar -xzf "$archive" -C "$unpack"
-  [ -f "$unpack/cosmopolitan-master/Makefile" ] || fail "unexpected Cosmopolitan source archive layout"
-  rm -rf "$COSMO_SRC"
-  mv "$unpack/cosmopolitan-master" "$COSMO_SRC"
-  rm -rf "$unpack"
-fi
-
-# Current Cosmopolitan source expects a pinned bootstrap compiler directory.
-mkdir -p "$COSMO_SRC/.cosmocc"
-if [ ! -e "$COSMO_SRC/.cosmocc/3.9.2" ] && [ ! -L "$COSMO_SRC/.cosmocc/3.9.2" ]; then
-  ln -s "$COSMOCC" "$COSMO_SRC/.cosmocc/3.9.2"
-fi
-
-cp "$ROOT/src/main.c" "$COSMO_APP"
-
-printf 'Building sysperm slice (x86_64)...\n'
-(
-  cd "$COSMO_SRC"
-  "$MAKE_CMD" SHELL=/bin/bash -j"$JOBS" MODE=x86_64 o/x86_64/examples/sysperm.dbg
-)
-
-printf 'Building sysperm slice (arm64)...\n'
-(
-  cd "$COSMO_SRC"
-  "$MAKE_CMD" SHELL=/bin/bash -j"$JOBS" MODE=aarch64 o/aarch64/examples/sysperm.dbg
-)
-
-[ -f "$X86_DBG" ] || fail "missing x86_64 linked slice"
-[ -f "$ARM_DBG" ] || fail "missing arm64 linked slice"
-
-printf 'Fat-linking sysperm.exe...\n'
-"$COSMOCC/bin/apelink" \
-  -V -1 \
-  -l "$COSMOCC/bin/ape-x86_64.elf" \
-  -l "$COSMOCC/bin/ape-aarch64.elf" \
-  -M "$COSMOCC/bin/ape-m1.c" \
-  -o "$OUT" \
-  "$X86_DBG" \
-  "$ARM_DBG"
-"$COSMOCC/bin/pecheck" "$OUT"
-
+printf 'Building fat x86_64+aarch64 APE...\n'
+"$COSMOCC/bin/cosmocc" -mcosmo -O2 -o "$OUT" "$ROOT/src/main.c"
 chmod 0755 "$OUT"
 printf 'Built %s\n' "$OUT"
