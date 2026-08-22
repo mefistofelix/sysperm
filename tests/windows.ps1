@@ -38,7 +38,7 @@ try {
     ('"' + $bin + '" exec ' + $user + ' -p "Sysperm-CI8!Next" -- whoami.exe > "' + $whoFile + '"'),
     ('"' + $bin + '" exec ' + $user + ' -p "Sysperm-CI8!Next" -- cmd.exe /d /c "echo stdout-value" > "' + $stdoutFile + '"'),
     ('"' + $bin + '" exec ' + $user + ' -p "Sysperm-CI8!Next" -- cmd.exe /v:on /d /c "set /p X=& echo !X!" < "' + $stdinFile + '" > "' + $stdinOutFile + '"'),
-    ('"' + $bin + '" exec ' + $user + ' -p "Sysperm-CI8!Next" -- cmd.exe /d /c "exit 23"'),
+    ('"' + $bin + '" exec ' + $user + ' -p "Sysperm-CI8!Next" -- cmd.exe /d /c "exit /b 23"'),
     ('echo %ERRORLEVEL% > "' + $exitFile + '"'),
     ('echo done > "' + $doneFile + '"')
   )
@@ -54,7 +54,8 @@ try {
   if (-not $who.ToLowerInvariant().EndsWith(('\' + $user).ToLowerInvariant())) { throw "impersonated exec identity failed: $who" }
   if ((Get-Content $stdoutFile -Raw).Trim() -ne 'stdout-value') { throw 'impersonated stdout inheritance failed' }
   if ((Get-Content $stdinOutFile -Raw).Trim() -ne 'stdin-value') { throw 'impersonated stdin inheritance failed' }
-  if ((Get-Content $exitFile -Raw).Trim() -ne '23') { throw 'impersonated exec exit code failed' }
+  $exitValue = (Get-Content $exitFile -Raw).Trim()
+  if ($exitValue -ne '23') { throw "impersonated exec exit code failed: $exitValue" }
 
   New-Item -ItemType Directory -Path $root | Out-Null
   New-Item -ItemType Directory -Path (Join-Path $root 'sub') | Out-Null
