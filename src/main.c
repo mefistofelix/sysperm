@@ -690,23 +690,29 @@ static int windows_run_as_user(const char *user, const char *password, char **co
   si.hStdError = GetStdHandle((uint32_t)-12);
   if (verbose) print_command(command);
   int32_t ok = create(u16, u".", p16, 0, NULL, c16, 0, NULL, NULL, &si, &pi);
+  uint32_t create_error = ok ? 0 : GetLastError();
+  if (verbose) fprintf(stderr, "sysperm: CreateProcessWithLogonW ok=%d process=%lld thread=%lld error=%u\n", ok, (long long)pi.hProcess, (long long)pi.hThread, create_error);
   free(u16); free(p16); free(c16);
   if (!ok) {
-    uint32_t e = GetLastError();
+    uint32_t e = create_error;
     if (e == 1326) fprintf(stderr, "sysperm: exec failed: invalid username or password\n");
     else if (e == 1385) fprintf(stderr, "sysperm: exec failed: this account is not allowed to log on this way\n");
     else if (e == 5) fprintf(stderr, "sysperm: exec failed: access denied\n");
     else fprintf(stderr, "sysperm: exec failed: Windows error %u\n", e);
     return e > 255 ? 1 : (int)e;
   }
+  if (verbose) fprintf(stderr, "sysperm: closing child thread handle\n");
   CloseHandle(pi.hThread);
+  if (verbose) fprintf(stderr, "sysperm: waiting for child process\n");
   if (WaitForSingleObject(pi.hProcess, 0xffffffffu) == 0xffffffffu) {
     CloseHandle(pi.hProcess);
     fprintf(stderr, "sysperm: exec failed while waiting for child process\n");
     return 1;
   }
+  if (verbose) fprintf(stderr, "sysperm: child process signaled\n");
   uint32_t code = 1;
   if (!GetExitCodeProcess(pi.hProcess, &code)) code = 1;
+  if (verbose) fprintf(stderr, "sysperm: child exit code %u\n", code);
   CloseHandle(pi.hProcess);
   return code > 255 ? 1 : (int)code;
 }

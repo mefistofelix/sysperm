@@ -19,7 +19,7 @@ try {
   $members = net localgroup $group
   if (-not ($members -match $user)) { throw 'membership missing' }
 
-  $who = (& $bin exec $user -p 'Sysperm-CI8!Next' -- cmd.exe /d /c 'echo %USERNAME%').Trim()
+  $who = (& $bin -v exec $user -p 'Sysperm-CI8!Next' -- cmd.exe /d /c 'echo %USERNAME%').Trim()
   if ($LASTEXITCODE -ne 0 -or $who -ne $user) { throw "impersonated exec identity failed: $who" }
   & $bin exec $user -p 'Sysperm-CI8!Next' -- cmd.exe /d /c 'exit 23'
   if ($LASTEXITCODE -ne 23) { throw "impersonated exec exit code failed: $LASTEXITCODE" }
