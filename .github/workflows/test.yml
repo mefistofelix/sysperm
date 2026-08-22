@@ -15,7 +15,7 @@ jobs:
     name: macOS / build + test
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install GNU make
         run: brew install make
       - name: Build fat APE on macOS
@@ -27,7 +27,7 @@ jobs:
     name: Windows / WSL build + test
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Ubuntu WSL
         uses: Vampire/setup-wsl@v7
         with:
@@ -35,7 +35,16 @@ jobs:
           additional-packages: make unzip tar curl coreutils binutils
       - name: Build fat APE in WSL
         shell: wsl-bash {0}
-        run: bash ./build.sh
+        run: |
+          set -euo pipefail
+          host_workspace=$PWD
+          work=/tmp/sysperm-build
+          rm -rf "$work"
+          mkdir -p "$work"
+          cp -a . "$work/"
+          cd "$work"
+          bash ./build.sh
+          cp sysperm.exe "$host_workspace/sysperm.exe"
       - name: Test Windows backend
         shell: pwsh
         run: |
@@ -46,7 +55,7 @@ jobs:
     name: Linux / build + host + distro families
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Ubuntu test dependencies
         run: sudo apt-get update && sudo apt-get install -y acl passwd sudo libc-bin bash
       - name: Build fat APE on Linux

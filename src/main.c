@@ -84,7 +84,15 @@ static int spawn_wait(char *const argv[], bool quiet) {
   }
   int status = 0;
   if (waitpid(pid, &status, 0) < 0) return 127;
-  if (WIFEXITED(status)) return WEXITSTATUS(status);
+  if (WIFEXITED(status)) {
+    int code = WEXITSTATUS(status);
+    if (code && !quiet) {
+      fprintf(stderr, "sysperm: command failed (%d):", code);
+      for (int i = 0; argv[i]; ++i) fprintf(stderr, " %s", argv[i]);
+      fputc('\n', stderr);
+    }
+    return code;
+  }
   return 128;
 }
 
@@ -200,7 +208,7 @@ static int ensure_user(Os os, const UserSpec *u) {
     } else if (os == OS_MACOS) {
       char *av[MAX_ARGS]; int n = 0;
       av[n++] = "sysadminctl"; av[n++] = "-addUser"; av[n++] = (char *)u->name;
-      av[n++] = "-password"; av[n++] = "-";
+      av[n++] = "-password"; av[n++] = "";
       if (u->home) { av[n++] = "-home"; av[n++] = (char *)u->home; }
       if (u->uid) { av[n++] = "-UID"; av[n++] = (char *)u->uid; }
       if (u->shell) { av[n++] = "-shell"; av[n++] = (char *)u->shell; }
