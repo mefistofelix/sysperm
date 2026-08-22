@@ -4,6 +4,7 @@ $user = 'sysperm_ci_user'
 $group = 'sysperm_ci_group'
 $root = Join-Path $env:TEMP ('sysperm-ci-' + $PID)
 $whoFile = Join-Path $env:PUBLIC ('sysperm-ci-' + $PID + '-who.txt')
+$emptyWhoFile = Join-Path $env:PUBLIC ('sysperm-ci-' + $PID + '-empty-who.txt')
 $stdoutFile = Join-Path $env:PUBLIC ('sysperm-ci-' + $PID + '-stdout.txt')
 $stdinFile = Join-Path $env:PUBLIC ('sysperm-ci-' + $PID + '-stdin.txt')
 $stdinOutFile = Join-Path $env:PUBLIC ('sysperm-ci-' + $PID + '-stdinout.txt')
@@ -17,7 +18,7 @@ function Cleanup {
   & $bin group $group --absent 2>$null | Out-Null
   Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
   schtasks.exe /Delete /TN $task /F 2>$null | Out-Null
-  Remove-Item -Force $whoFile,$stdoutFile,$stdinFile,$stdinOutFile,$exitFile,$doneFile,$runner -ErrorAction SilentlyContinue
+  Remove-Item -Force $whoFile,$emptyWhoFile,$stdoutFile,$stdinFile,$stdinOutFile,$exitFile,$doneFile,$runner -ErrorAction SilentlyContinue
 }
 
 try {
@@ -25,6 +26,9 @@ try {
   if ($LASTEXITCODE) { throw 'user create failed' }
   & $bin user $user -p 'Sysperm-CI8!Next'
   if ($LASTEXITCODE) { throw 'password reset failed' }
+  # Omitting -p on an existing user must leave the password unchanged.
+  & $bin user $user
+  if ($LASTEXITCODE) { throw 'password-preserving upsert failed' }
   net user $user | Out-Null
   $members = net localgroup $group
   if (-not ($members -match $user)) { throw 'membership missing' }
@@ -40,6 +44,9 @@ try {
     ('"' + $bin + '" exec ' + $user + ' -p "Sysperm-CI8!Next" -- cmd.exe /v:on /d /c "set /p X=& echo !X!" < "' + $stdinFile + '" > "' + $stdinOutFile + '"'),
     ('"' + $bin + '" exec ' + $user + ' -p "Sysperm-CI8!Next" -- cmd.exe /d /c "exit /b 23"'),
     ('echo %ERRORLEVEL% > "' + $exitFile + '"'),
+    ('"' + $bin + '" user ' + $user + ' -p ""'),
+    ('"' + $bin + '" user ' + $user),
+    ('"' + $bin + '" exec ' + $user + ' -- whoami.exe > "' + $emptyWhoFile + '"'),
     ('echo done > "' + $doneFile + '"')
   )
   Set-Content -Path $runner -Value $lines -Encoding Ascii
@@ -56,6 +63,8 @@ try {
   if ((Get-Content $stdinOutFile -Raw).Trim() -ne 'stdin-value') { throw 'impersonated stdin inheritance failed' }
   $exitValue = (Get-Content $exitFile -Raw).Trim()
   if ($exitValue -ne '23') { throw "impersonated exec exit code failed: $exitValue" }
+  $emptyWho = (Get-Content $emptyWhoFile -Raw).Trim()
+  if (-not $emptyWho.ToLowerInvariant().EndsWith(('\' + $user).ToLowerInvariant())) { throw "empty-password exec failed: $emptyWho" }
 
   New-Item -ItemType Directory -Path $root | Out-Null
   New-Item -ItemType Directory -Path (Join-Path $root 'sub') | Out-Null

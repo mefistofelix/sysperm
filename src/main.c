@@ -698,10 +698,7 @@ static bool enable_windows_privilege(const char16_t *name) {
 }
 
 static int windows_run_as_user(const char *user, const char *password, char **command) {
-  if (!password) {
-    fprintf(stderr, "sysperm: Windows exec requires -p PASSWORD\n");
-    return 2;
-  }
+  if (!password) password = "";
   void *advapi = cosmo_dlopen("advapi32.dll", RTLD_LAZY);
   void *raw_logon = advapi ? cosmo_dlsym(advapi, "LogonUserW") : NULL;
   void *raw_create = advapi ? cosmo_dlsym(advapi, "CreateProcessAsUserW") : NULL;
@@ -932,7 +929,7 @@ int main(int argc, char **argv) {
 
   if (!strcmp(argv[1], "exec")) {
     if (argc < 5) { usage(stderr); return 2; }
-    const char *password = NULL;
+    const char *password = "";
     int i = 3;
     while (i < argc && strcmp(argv[i], "--")) {
       if (!strcmp(argv[i], "-p") || !strcmp(argv[i], "--password")) password = need_arg(argc, argv, &i, argv[i]);
