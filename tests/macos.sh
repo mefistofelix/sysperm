@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -euxo pipefail
 BIN=${BIN:-./sysperm.exe}
 U=sysperm_ci_user
 G=sysperm_ci_group
