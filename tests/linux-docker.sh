@@ -24,4 +24,4 @@ run_distro alpine-3.24 alpine:3.24 \
 run_distro almalinux-9 almalinux:9 \
   'dnf install -y acl shadow-utils passwd sudo glibc-common bash'
 run_distro opensuse-tumbleweed opensuse/tumbleweed:latest \
-  'zypper --non-interactive install acl shadow sudo glibc bash'
+  'ok=; for i in 1 2 3; do zypper clean -a; if zypper --non-interactive refresh && zypper --non-interactive install acl shadow sudo glibc bash; then ok=1; break; fi; sleep 5; done; test "$ok" = 1'

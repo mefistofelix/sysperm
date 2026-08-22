@@ -11,9 +11,9 @@ function Cleanup {
 }
 
 try {
-  & $bin user $user -g $group -p 'sysperm-ci-password'
+  & $bin user $user -g $group -p 'Sysperm-CI9!Pass'
   if ($LASTEXITCODE) { throw 'user create failed' }
-  & $bin user $user -p 'sysperm-ci-password-2'
+  & $bin user $user -p 'Sysperm-CI8!Next'
   if ($LASTEXITCODE) { throw 'password reset failed' }
   net user $user | Out-Null
   $members = net localgroup $group

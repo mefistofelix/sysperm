@@ -277,7 +277,13 @@ static int set_password(Os os, const char *user, const char *password) {
     snprintf(node, sizeof(node), "/Users/%s", user);
     return runv(false, "dscl", ".", "-passwd", node, password, NULL);
   }
-  if (os == OS_WINDOWS) return runv(false, "net.exe", "user", user, password, "/Y", NULL);
+  if (os == OS_WINDOWS) {
+    if (!*password) {
+      int rc = runv(false, "net.exe", "user", user, "/passwordreq:no", NULL);
+      if (rc) return rc;
+    }
+    return runv(false, "net.exe", "user", user, password, "/Y", NULL);
+  }
   return 2;
 }
 
@@ -374,7 +380,11 @@ static int ensure_user(Os os, const UserSpec *u) {
         rc = runv(false, "dscl", ".", "-create", node, "PrimaryGroupID", value, NULL);
       }
     } else if (os == OS_WINDOWS) {
-      rc = runv(false, "net.exe", "user", username, u->password ? u->password : "", "/add", "/Y", NULL);
+      if (u->password && *u->password) {
+        rc = runv(false, "net.exe", "user", username, u->password, "/add", "/Y", NULL);
+      } else {
+        rc = runv(false, "net.exe", "user", username, "", "/add", "/passwordreq:no", "/Y", NULL);
+      }
     } else rc = 2;
     if (rc) return rc;
     if (os == OS_LINUX && (rc = set_password(os, username, u->password ? u->password : ""))) return rc;
