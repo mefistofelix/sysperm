@@ -20,6 +20,15 @@ jobs:
         run: bash ./build.sh
       - name: Test macOS backend
         run: chmod +x sysperm.exe tests/macos.sh && BIN=./sysperm.exe bash ./tests/macos.sh
+      - name: Probe Cosmopolitan account lookup on macOS
+        run: |
+          cp src/main.c /tmp/sysperm-main.c
+          cp tests/identity.c src/main.c
+          bash ./build.sh
+          mv sysperm.exe tests/identity.exe
+          cp /tmp/sysperm-main.c src/main.c
+          ./tests/identity.exe root
+          ./tests/identity.exe "$USER"
 
   windows:
     name: Windows / WSL build + test
@@ -60,6 +69,15 @@ jobs:
         run: bash ./build.sh
       - name: Test Ubuntu runner backend
         run: chmod +x sysperm.exe tests/linux.sh && BIN=./sysperm.exe bash ./tests/linux.sh
+      - name: Probe Cosmopolitan account lookup on Linux
+        run: |
+          cp src/main.c /tmp/sysperm-main.c
+          cp tests/identity.c src/main.c
+          bash ./build.sh
+          mv sysperm.exe tests/identity.exe
+          cp /tmp/sysperm-main.c src/main.c
+          ./tests/identity.exe root
+          ./tests/identity.exe nobody
       - name: Test Linux distro families with Docker
         run: chmod +x tests/linux-docker.sh && bash ./tests/linux-docker.sh
       - name: Create or update tag release
