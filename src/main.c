@@ -658,7 +658,7 @@ static char *win_command_line(char **argv) {
   return out;
 }
 
-typedef int32_t (*CreateProcessWithLogonWFn)(
+typedef int32_t (__msabi *CreateProcessWithLogonWFn)(
     const char16_t *, const char16_t *, const char16_t *, uint32_t,
     const char16_t *, char16_t *, uint32_t, void *, const char16_t *,
     struct NtStartupInfo *, struct NtProcessInformation *);
@@ -670,7 +670,7 @@ static int windows_run_as_user(const char *user, const char *password, char **co
   }
   void *advapi = cosmo_dlopen("advapi32.dll", RTLD_LAZY);
   void *raw_create = advapi ? cosmo_dlsym(advapi, "CreateProcessWithLogonW") : NULL;
-  CreateProcessWithLogonWFn create = raw_create ? (CreateProcessWithLogonWFn)cosmo_dltramp(raw_create) : NULL;
+  CreateProcessWithLogonWFn create = (CreateProcessWithLogonWFn)raw_create;
   if (!create) {
     fprintf(stderr, "sysperm: Windows native logon API is unavailable\n");
     return 127;
