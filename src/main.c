@@ -743,8 +743,12 @@ static int windows_run_as_user(const char *user, const char *password, char **co
   struct NtStartupInfo si = {0};
   struct NtProcessInformation pi = {0};
   si.cb = sizeof(si);
+  si.dwFlags = 0x00000100u; /* STARTF_USESTDHANDLES */
+  si.hStdInput = GetStdHandle((uint32_t)-10);
+  si.hStdOutput = GetStdHandle((uint32_t)-11);
+  si.hStdError = GetStdHandle((uint32_t)-12);
   if (verbose) print_command(command);
-  ok = create(primary, NULL, c16, NULL, NULL, 0, 0x08000000u,
+  ok = create(primary, NULL, c16, NULL, NULL, 1, 0x08000000u,
               NULL, NULL, &si, &pi);
   uint32_t create_error = ok ? 0 : GetLastError();
   if (verbose) fprintf(stderr, "sysperm: CreateProcessAsUserW ok=%d process=%lld thread=%lld error=%u\n", ok, (long long)pi.hProcess, (long long)pi.hThread, create_error);

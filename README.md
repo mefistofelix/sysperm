@@ -33,6 +33,19 @@ For new users, the default shell is `/bin/sh` on Linux and `/bin/zsh` on macOS. 
 
 The caller is responsible for running `sysperm` with whatever privileges the requested system operation requires.
 
+## Execute as another local user
+
+```sh
+sysperm exec app -- program arg1 "arg with spaces"
+sysperm exec app -p 'password' -- program arg1
+```
+
+On Linux and macOS, `sysperm` resolves a local account, initializes its supplementary groups, switches GID/UID, and replaces itself with the requested program. The child therefore inherits the caller's stdin, stdout and stderr normally, including ordinary shell redirection, and its exit status becomes the `sysperm` exit status.
+
+On Windows, `-p` / `--password` is required. `sysperm` uses native Windows APIs (`LogonUserW`, `DuplicateTokenEx`, and `CreateProcessAsUserW`) and waits for the child, propagating its exit code. Standard input/output/error handles are inherited, so ordinary redirection around `sysperm` is also inherited by the launched process. Windows alternate-user process creation requires the caller token to hold the privileges required by `CreateProcessAsUserW`, notably `SeIncreaseQuotaPrivilege` and, for a different unrestricted primary token, `SeAssignPrimaryTokenPrivilege`. Merely being a member of Administrators does not guarantee that the latter privilege is present in the current token; service/System contexts commonly have it. `sysperm` reports `ERROR_PRIVILEGE_NOT_HELD` explicitly instead of silently falling back to PowerShell, `runas`, or another mechanism.
+
+The execution feature intentionally targets local users only; it does not promise generic NSS/LDAP/Active Directory identity resolution.
+
 ## Filesystem permissions
 
 Permission operations are recursive by default:

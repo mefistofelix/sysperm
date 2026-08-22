@@ -4,12 +4,20 @@ $user = 'sysperm_ci_user'
 $group = 'sysperm_ci_group'
 $root = Join-Path $env:TEMP ('sysperm-ci-' + $PID)
 $whoFile = Join-Path $env:PUBLIC ('sysperm-ci-' + $PID + '-who.txt')
+$stdoutFile = Join-Path $env:PUBLIC ('sysperm-ci-' + $PID + '-stdout.txt')
+$stdinFile = Join-Path $env:PUBLIC ('sysperm-ci-' + $PID + '-stdin.txt')
+$stdinOutFile = Join-Path $env:PUBLIC ('sysperm-ci-' + $PID + '-stdinout.txt')
+$exitFile = Join-Path $env:PUBLIC ('sysperm-ci-' + $PID + '-exit.txt')
+$doneFile = Join-Path $env:PUBLIC ('sysperm-ci-' + $PID + '-done.txt')
+$runner = Join-Path $env:PUBLIC ('sysperm-ci-' + $PID + '-run.cmd')
+$task = 'sysperm-ci-' + $PID
 
 function Cleanup {
   & $bin user $user --absent 2>$null | Out-Null
   & $bin group $group --absent 2>$null | Out-Null
   Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
-  Remove-Item -Force $whoFile -ErrorAction SilentlyContinue
+  schtasks.exe /Delete /TN $task /F 2>$null | Out-Null
+  Remove-Item -Force $whoFile,$stdoutFile,$stdinFile,$stdinOutFile,$exitFile,$doneFile,$runner -ErrorAction SilentlyContinue
 }
 
 try {
@@ -21,13 +29,32 @@ try {
   $members = net localgroup $group
   if (-not ($members -match $user)) { throw 'membership missing' }
 
-  $whoCmd = "echo %USERNAME% > `"$whoFile`""
-  & $bin -v exec $user -p 'Sysperm-CI8!Next' -- cmd.exe /d /c $whoCmd
-  if ($LASTEXITCODE -ne 0) { throw "impersonated exec launch failed: $LASTEXITCODE" }
+  # Hosted Windows administrators do not carry SeAssignPrimaryTokenPrivilege.
+  # Run the impersonation checks as LocalSystem so CreateProcessAsUserW is
+  # tested under the privilege model sysperm documents for this operation.
+  Set-Content -Path $stdinFile -Value 'stdin-value' -NoNewline
+  $lines = @(
+    '@echo off',
+    ('"' + $bin + '" -v exec ' + $user + ' -p "Sysperm-CI8!Next" -- cmd.exe /d /c "echo %USERNAME%" > "' + $whoFile + '" 2>&1'),
+    ('"' + $bin + '" exec ' + $user + ' -p "Sysperm-CI8!Next" -- cmd.exe /d /c "echo stdout-value" > "' + $stdoutFile + '"'),
+    ('"' + $bin + '" exec ' + $user + ' -p "Sysperm-CI8!Next" -- cmd.exe /v:on /d /c "set /p X=& echo !X!" < "' + $stdinFile + '" > "' + $stdinOutFile + '"'),
+    ('"' + $bin + '" exec ' + $user + ' -p "Sysperm-CI8!Next" -- cmd.exe /d /c "exit 23"'),
+    ('echo %ERRORLEVEL% > "' + $exitFile + '"'),
+    ('echo done > "' + $doneFile + '"')
+  )
+  Set-Content -Path $runner -Value $lines -Encoding Ascii
+  $start = (Get-Date).AddMinutes(2).ToString('HH:mm')
+  schtasks.exe /Create /TN $task /TR ('"' + $runner + '"') /SC ONCE /ST $start /RU SYSTEM /RL HIGHEST /F | Out-Null
+  if ($LASTEXITCODE) { throw 'scheduled impersonation test creation failed' }
+  schtasks.exe /Run /TN $task | Out-Null
+  if ($LASTEXITCODE) { throw 'scheduled impersonation test launch failed' }
+  for ($i = 0; $i -lt 60 -and -not (Test-Path $doneFile); $i++) { Start-Sleep -Milliseconds 500 }
+  if (-not (Test-Path $doneFile)) { throw 'scheduled impersonation test timed out' }
   $who = (Get-Content $whoFile -Raw).Trim()
   if ($who -ne $user) { throw "impersonated exec identity failed: $who" }
-  & $bin exec $user -p 'Sysperm-CI8!Next' -- cmd.exe /d /c 'exit 23'
-  if ($LASTEXITCODE -ne 23) { throw "impersonated exec exit code failed: $LASTEXITCODE" }
+  if ((Get-Content $stdoutFile -Raw).Trim() -ne 'stdout-value') { throw 'impersonated stdout inheritance failed' }
+  if ((Get-Content $stdinOutFile -Raw).Trim() -ne 'stdin-value') { throw 'impersonated stdin inheritance failed' }
+  if ((Get-Content $exitFile -Raw).Trim() -ne '23') { throw 'impersonated exec exit code failed' }
 
   New-Item -ItemType Directory -Path $root | Out-Null
   New-Item -ItemType Directory -Path (Join-Path $root 'sub') | Out-Null
