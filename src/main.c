@@ -15,12 +15,12 @@
 #include <unistd.h>
 
 #include "libc/dce.h"
+#include "libc/dlopen/dlfcn.h"
 #include "libc/nt/accounting.h"
 #include "libc/nt/dll.h"
 #include "libc/nt/process.h"
 #include "libc/nt/runtime.h"
 #include "libc/nt/synchronization.h"
-#include "libc/nt/thunk/msabi.h"
 #include "libc/x/x.h"
 
 extern char **environ;
@@ -658,7 +658,7 @@ static char *win_command_line(char **argv) {
   return out;
 }
 
-typedef int32_t (__msabi *CreateProcessWithLogonWFn)(
+typedef int32_t (*CreateProcessWithLogonWFn)(
     const char16_t *, const char16_t *, const char16_t *, uint32_t,
     const char16_t *, char16_t *, uint32_t, void *, const char16_t *,
     struct NtStartupInfo *, struct NtProcessInformation *);
@@ -669,7 +669,8 @@ static int windows_run_as_user(const char *user, const char *password, char **co
     return 2;
   }
   int64_t advapi = LoadLibraryA("advapi32.dll");
-  CreateProcessWithLogonWFn create = advapi ? (CreateProcessWithLogonWFn)GetProcAddress(advapi, "CreateProcessWithLogonW") : NULL;
+  void *raw_create = advapi ? GetProcAddress(advapi, "CreateProcessWithLogonW") : NULL;
+  CreateProcessWithLogonWFn create = raw_create ? (CreateProcessWithLogonWFn)cosmo_dltramp(raw_create) : NULL;
   if (!create) {
     fprintf(stderr, "sysperm: Windows native logon API is unavailable\n");
     return 127;
