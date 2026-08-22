@@ -22,6 +22,6 @@ run_distro debian-12 debian:12 \
 run_distro alpine-3.24 alpine:3.24 \
   'apk add --no-cache acl shadow sudo bash musl-utils'
 run_distro almalinux-9 almalinux:9 \
-  'dnf install -y acl shadow-utils sudo glibc-common bash'
+  'dnf install -y acl shadow-utils passwd sudo glibc-common bash'
 run_distro opensuse-tumbleweed opensuse/tumbleweed:latest \
   'zypper --non-interactive install acl shadow sudo glibc bash'
