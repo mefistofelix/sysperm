@@ -214,7 +214,12 @@ static int ensure_user(Os os, const UserSpec *u) {
       if (u->shell) { av[n++] = "-shell"; av[n++] = (char *)u->shell; }
       av[n] = NULL;
       rc = spawn_wait(av, false);
-      if (rc && user_exists(os, u->name)) rc = 0;
+      if (rc) {
+        for (int i = 0; i < 5 && rc; ++i) {
+          if (user_exists(os, u->name)) rc = 0;
+          else sleep(1);
+        }
+      }
       if (!rc && u->gid) {
         char node[512]; snprintf(node, sizeof(node), "/Users/%s", u->name);
         rc = runv(false, "dscl", ".", "-create", node, "PrimaryGroupID", u->gid, NULL);
