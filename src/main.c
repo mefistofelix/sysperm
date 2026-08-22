@@ -730,6 +730,13 @@ static int windows_run_as_user(const char *user, const char *password, char **co
     else fprintf(stderr, "sysperm: exec failed during Windows logon: error %u\n", logon_error);
     return logon_error > 255 ? 1 : (int)logon_error;
   }
+  int64_t primary = 0;
+  if (!DuplicateTokenEx(token, kNtTokenAllAccess, NULL, 2, 1, &primary)) {
+    uint32_t e = GetLastError();
+    free(u16); free(p16); free(c16); CloseHandle(token);
+    fprintf(stderr, "sysperm: exec failed while creating a Windows primary token: error %u\n", e);
+    return e > 255 ? 1 : (int)e;
+  }
   bool quota = enable_windows_privilege(u"SeIncreaseQuotaPrivilege");
   bool assign = enable_windows_privilege(u"SeAssignPrimaryTokenPrivilege");
   if (verbose) fprintf(stderr, "sysperm: Windows privileges increase-quota=%d assign-primary-token=%d\n", quota, assign);
@@ -737,11 +744,12 @@ static int windows_run_as_user(const char *user, const char *password, char **co
   struct NtProcessInformation pi = {0};
   si.cb = sizeof(si);
   if (verbose) print_command(command);
-  ok = create(token, NULL, c16, NULL, NULL, 0, 0x08000000u,
+  ok = create(primary, NULL, c16, NULL, NULL, 0, 0x08000000u,
               NULL, NULL, &si, &pi);
   uint32_t create_error = ok ? 0 : GetLastError();
   if (verbose) fprintf(stderr, "sysperm: CreateProcessAsUserW ok=%d process=%lld thread=%lld error=%u\n", ok, (long long)pi.hProcess, (long long)pi.hThread, create_error);
   free(u16); free(p16); free(c16);
+  CloseHandle(primary);
   CloseHandle(token);
   if (!ok) {
     uint32_t e = create_error;
