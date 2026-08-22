@@ -11,7 +11,7 @@ TMP="$BUILD/tmp"
 COSMOCC="$BUILD/cosmocc"
 COSMO_SRC="$BUILD/cosmopolitan-src"
 COSMO_APP="$COSMO_SRC/examples/sysperm.c"
-X86_DBG="$COSMO_SRC/o//examples/sysperm.dbg"
+X86_DBG="$COSMO_SRC/o/examples/sysperm.dbg"
 ARM_DBG="$COSMO_SRC/o/aarch64/examples/sysperm.dbg"
 OUT="$ROOT/sysperm.exe"
 

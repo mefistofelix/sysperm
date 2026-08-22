@@ -44,7 +44,6 @@ jobs:
 
   linux:
     name: Linux / build + host + distro families
-    needs: [macos, windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
