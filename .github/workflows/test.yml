@@ -1,0 +1,76 @@
+name: test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build fat APE
+        run: ./build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sysperm-ape
+          path: sysperm.exe
+
+  linux:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu-22.04
+            image: ubuntu:22.04
+            install: apt-get update && apt-get install -y acl passwd sudo libc-bin bash
+          - name: ubuntu-24.04
+            image: ubuntu:24.04
+            install: apt-get update && apt-get install -y acl passwd sudo libc-bin bash
+          - name: debian-12
+            image: debian:12
+            install: apt-get update && apt-get install -y acl passwd sudo libc-bin bash
+          - name: alpine-3.24
+            image: alpine:3.24
+            install: apk add --no-cache acl shadow sudo bash musl-utils
+          - name: almalinux-9
+            image: almalinux:9
+            install: dnf install -y acl shadow-utils sudo glibc-common bash
+          - name: opensuse-tumbleweed
+            image: opensuse/tumbleweed:latest
+            install: zypper --non-interactive install acl shadow sudo glibc bash
+    runs-on: ubuntu-latest
+    name: linux / ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: sysperm-ape
+      - name: Exercise distro
+        run: |
+          docker run --rm --privileged             -v "$PWD:/work" -w /work             ${{ matrix.image }}             /bin/sh -lc '${{ matrix.install }} && chmod +x sysperm.exe tests/linux.sh && BIN=./sysperm.exe ./tests/linux.sh'
+
+  macos:
+    needs: build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: sysperm-ape
+      - name: Exercise users, groups, modes and ACLs
+        run: chmod +x sysperm.exe tests/macos.sh && BIN=./sysperm.exe ./tests/macos.sh
+
+  windows:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: sysperm-ape
+      - name: Exercise users, groups and ACLs
+        shell: pwsh
+        run: $env:BIN = (Resolve-Path .\sysperm.exe); .\tests\windows.ps1
