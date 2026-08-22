@@ -668,10 +668,10 @@ static char16_t *utf8to16z(const char *s) {
   return q;
 }
 
-typedef int32_t (__msabi *LogonUserWFn)(const char16_t *, const char16_t *,
-                                        const char16_t *, uint32_t, uint32_t,
-                                        int64_t *);
-typedef int32_t (__msabi *CreateProcessWithTokenWFn)(
+typedef int32_t (*LogonUserWFn)(const char16_t *, const char16_t *,
+                                const char16_t *, uint32_t, uint32_t,
+                                int64_t *);
+typedef int32_t (*CreateProcessWithTokenWFn)(
     int64_t, uint32_t, const char16_t *, char16_t *, uint32_t, void *,
     const char16_t *, struct NtStartupInfo *, struct NtProcessInformation *);
 
@@ -680,9 +680,11 @@ static int windows_run_as_user(const char *user, const char *password, char **co
     fprintf(stderr, "sysperm: Windows exec requires -p PASSWORD\n");
     return 2;
   }
-  int64_t advapi = LoadLibraryA("advapi32.dll");
-  LogonUserWFn logon = advapi ? (LogonUserWFn)GetProcAddress(advapi, "LogonUserW") : NULL;
-  CreateProcessWithTokenWFn create = advapi ? (CreateProcessWithTokenWFn)GetProcAddress(advapi, "CreateProcessWithTokenW") : NULL;
+  void *advapi = cosmo_dlopen("advapi32.dll", RTLD_LAZY);
+  void *raw_logon = advapi ? cosmo_dlsym(advapi, "LogonUserW") : NULL;
+  void *raw_create = advapi ? cosmo_dlsym(advapi, "CreateProcessWithTokenW") : NULL;
+  LogonUserWFn logon = raw_logon ? (LogonUserWFn)cosmo_dltramp(raw_logon) : NULL;
+  CreateProcessWithTokenWFn create = raw_create ? (CreateProcessWithTokenWFn)cosmo_dltramp(raw_create) : NULL;
   if (!logon || !create) {
     fprintf(stderr, "sysperm: Windows native logon/process APIs are unavailable\n");
     return 127;
