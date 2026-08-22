@@ -28,6 +28,8 @@ typedef struct {
   const char *shell;
   const char *uid;
   const char *gid;
+  const char *primary_group;
+  const char *password;
   const char *groups[MAX_GROUPS];
   int group_count;
   bool private_group;
@@ -96,6 +98,60 @@ static int spawn_wait(char *const argv[], bool quiet) {
   return 128;
 }
 
+static int spawn_wait_input(char *const argv[], const char *input, bool quiet) {
+  int fds[2];
+  if (pipe(fds)) return 127;
+  size_t len = strlen(input);
+  ssize_t written = write(fds[1], input, len);
+  close(fds[1]);
+  if (written < 0 || (size_t)written != len) { close(fds[0]); return 127; }
+
+  pid_t pid;
+  posix_spawn_file_actions_t fa;
+  posix_spawn_file_actions_init(&fa);
+  posix_spawn_file_actions_adddup2(&fa, fds[0], STDIN_FILENO);
+  int nullfd = -1;
+  if (quiet) {
+    nullfd = open("/dev/null", O_WRONLY);
+    if (nullfd >= 0) {
+      posix_spawn_file_actions_adddup2(&fa, nullfd, STDOUT_FILENO);
+      posix_spawn_file_actions_adddup2(&fa, nullfd, STDERR_FILENO);
+    }
+  }
+  int rc = posix_spawnp(&pid, argv[0], &fa, NULL, argv, environ);
+  posix_spawn_file_actions_destroy(&fa);
+  close(fds[0]);
+  if (nullfd >= 0) close(nullfd);
+  if (rc) return 127;
+  int status = 0;
+  if (waitpid(pid, &status, 0) < 0) return 127;
+  return WIFEXITED(status) ? WEXITSTATUS(status) : 128;
+}
+
+static int spawn_capture(char *const argv[], char *out, size_t out_size) {
+  int fds[2];
+  if (pipe(fds)) return 127;
+  pid_t pid;
+  posix_spawn_file_actions_t fa;
+  posix_spawn_file_actions_init(&fa);
+  posix_spawn_file_actions_adddup2(&fa, fds[1], STDOUT_FILENO);
+  int rc = posix_spawnp(&pid, argv[0], &fa, NULL, argv, environ);
+  posix_spawn_file_actions_destroy(&fa);
+  close(fds[1]);
+  if (rc) { close(fds[0]); return 127; }
+  size_t used = 0;
+  while (used + 1 < out_size) {
+    ssize_t n = read(fds[0], out + used, out_size - used - 1);
+    if (n <= 0) break;
+    used += (size_t)n;
+  }
+  close(fds[0]);
+  out[used] = 0;
+  int status = 0;
+  if (waitpid(pid, &status, 0) < 0) return 127;
+  return WIFEXITED(status) ? WEXITSTATUS(status) : 128;
+}
+
 static int runv(bool quiet, const char *a0, ...) {
   char *argv[MAX_ARGS];
   int n = 0;
@@ -119,6 +175,28 @@ static bool user_exists(Os os, const char *name) {
   }
   if (os == OS_WINDOWS) return runv(true, "net.exe", "user", name, NULL) == 0;
   return false;
+}
+
+static bool is_numeric_id(const char *s) {
+  if (!s || !*s) return false;
+  for (; *s; ++s) if (*s < '0' || *s > '9') return false;
+  return true;
+}
+
+static bool is_windows_sid(const char *s) {
+  if (!s || strncmp(s, "S-1-", 4)) return false;
+  s += 4;
+  bool digit = false;
+  for (; *s; ++s) {
+    if (*s >= '0' && *s <= '9') digit = true;
+    else if (*s == '-' && digit) digit = false;
+    else return false;
+  }
+  return digit;
+}
+
+static bool is_platform_id(Os os, const char *s) {
+  return os == OS_WINDOWS ? is_windows_sid(s) : is_numeric_id(s);
 }
 
 static bool group_exists(Os os, const char *name) {
@@ -164,33 +242,101 @@ static int ensure_group(Os os, const GroupSpec *g) {
   return 0;
 }
 
-static int add_membership(Os os, const char *user, const char *group) {
-  GroupSpec g = {.name = group};
-  int rc = ensure_group(os, &g);
+static int mac_group_gid(const char *group, char gid[32]) {
+  char node[512];
+  snprintf(node, sizeof(node), "/Groups/%s", group);
+  char *av[] = {"dscl", ".", "-read", node, "PrimaryGroupID", NULL};
+  char out[256];
+  int rc = spawn_capture(av, out, sizeof(out));
   if (rc) return rc;
+  char *p = strrchr(out, ' ');
+  if (!p) return 2;
+  while (*p == ' ') ++p;
+  size_t n = strcspn(p, "\r\n");
+  if (!n || n >= 32) return 2;
+  memcpy(gid, p, n);
+  gid[n] = 0;
+  return 0;
+}
+
+static int set_password(Os os, const char *user, const char *password) {
+  if (strchr(password, '\n') || strchr(password, '\r')) {
+    fprintf(stderr, "sysperm: password cannot contain a newline\n");
+    return 2;
+  }
+  if (os == OS_LINUX) {
+    if (!*password) return runv(false, "passwd", "-d", user, NULL);
+    char line[4096];
+    int n = snprintf(line, sizeof(line), "%s:%s\n", user, password);
+    if (n < 0 || (size_t)n >= sizeof(line)) return 2;
+    char *av[] = {"chpasswd", NULL};
+    return spawn_wait_input(av, line, false);
+  }
+  if (os == OS_MACOS) {
+    char node[512];
+    snprintf(node, sizeof(node), "/Users/%s", user);
+    return runv(false, "dscl", ".", "-passwd", node, password, NULL);
+  }
+  if (os == OS_WINDOWS) return runv(false, "net.exe", "user", user, password, NULL);
+  return 2;
+}
+
+static int add_membership(Os os, const char *user, const char *group) {
+  bool numeric = is_numeric_id(group);
+  bool sid = is_windows_sid(group);
+  if (os == OS_MACOS && numeric) {
+    fprintf(stderr, "sysperm: dseditgroup membership requires a group name, not a GID\n");
+    return 2;
+  }
+  if (!(os == OS_LINUX && numeric) && !(os == OS_WINDOWS && sid)) {
+    GroupSpec g = {.name = group};
+    int rc = ensure_group(os, &g);
+    if (rc) return rc;
+  }
   if (os == OS_LINUX) return runv(false, "usermod", "-a", "-G", group, user, NULL);
   if (os == OS_MACOS) return runv(false, "dseditgroup", "-o", "edit", "-a", user, "-t", "user", group, NULL);
+  if (os == OS_WINDOWS && sid) {
+    fprintf(stderr, "sysperm: net.exe localgroup does not provide a SID form for membership; use the group name\n");
+    return 2;
+  }
   if (os == OS_WINDOWS) return runv(false, "net.exe", "localgroup", group, user, "/add", NULL);
   return 2;
 }
 
 static int ensure_user(Os os, const UserSpec *u) {
-  bool exists = user_exists(os, u->name);
+  const char *username = u->name;
+  bool exists = user_exists(os, username);
+  const char *primary = u->primary_group;
+  if (!primary && u->group_count) primary = u->groups[0];
+  if (!primary && !exists && u->private_group && os != OS_WINDOWS) primary = u->name;
   if (u->absent) {
     if (!exists) return 0;
-    if (os == OS_LINUX) return runv(false, "userdel", u->name, NULL);
+    if (os == OS_LINUX) return runv(false, "userdel", username, NULL);
     if (os == OS_MACOS) {
-      char node[512]; snprintf(node, sizeof(node), "/Users/%s", u->name);
+      char node[512]; snprintf(node, sizeof(node), "/Users/%s", username);
       return runv(false, "dscl", ".", "-delete", node, NULL);
     }
-    if (os == OS_WINDOWS) return runv(false, "net.exe", "user", u->name, "/delete", NULL);
+    if (os == OS_WINDOWS) return runv(false, "net.exe", "user", username, "/delete", NULL);
     return 2;
   }
 
-  if (!exists && u->private_group && os != OS_WINDOWS) {
-    GroupSpec pg = {.name = u->name};
+  const char *primary_backend = primary;
+  char mac_primary_gid[32];
+  if (primary && os == OS_LINUX && !is_numeric_id(primary)) {
+    GroupSpec pg = {.name = primary};
     int rc = ensure_group(os, &pg);
     if (rc) return rc;
+  } else if (primary && os == OS_MACOS) {
+    if (is_numeric_id(primary)) {
+      primary_backend = primary;
+    } else {
+      GroupSpec pg = {.name = primary};
+      int rc = ensure_group(os, &pg);
+      if (rc) return rc;
+      rc = mac_group_gid(primary, mac_primary_gid);
+      if (rc) return rc;
+      primary_backend = mac_primary_gid;
+    }
   }
 
   if (!exists) {
@@ -198,54 +344,62 @@ static int ensure_user(Os os, const UserSpec *u) {
     if (os == OS_LINUX) {
       char *av[MAX_ARGS]; int n = 0;
       av[n++] = "useradd";
-      if (u->private_group) { av[n++] = "-g"; av[n++] = (char *)u->name; }
+      if (primary) { av[n++] = "-g"; av[n++] = (char *)primary_backend; }
       if (u->home) { av[n++] = "-d"; av[n++] = (char *)u->home; }
-      if (u->shell) { av[n++] = "-s"; av[n++] = (char *)u->shell; }
+      av[n++] = "-s"; av[n++] = (char *)(u->shell ? u->shell : "/bin/sh");
       if (u->uid) { av[n++] = "-u"; av[n++] = (char *)u->uid; }
       if (u->gid) { av[n++] = "-g"; av[n++] = (char *)u->gid; }
-      av[n++] = (char *)u->name; av[n] = NULL;
+      av[n++] = (char *)username; av[n] = NULL;
       rc = spawn_wait(av, false);
     } else if (os == OS_MACOS) {
       char *av[MAX_ARGS]; int n = 0;
-      av[n++] = "sysadminctl"; av[n++] = "-addUser"; av[n++] = (char *)u->name;
-      av[n++] = "-password"; av[n++] = "";
+      av[n++] = "sysadminctl"; av[n++] = "-addUser"; av[n++] = (char *)username;
+      av[n++] = "-password"; av[n++] = (char *)(u->password ? u->password : "");
       if (u->home) { av[n++] = "-home"; av[n++] = (char *)u->home; }
       if (u->uid) { av[n++] = "-UID"; av[n++] = (char *)u->uid; }
-      if (u->shell) { av[n++] = "-shell"; av[n++] = (char *)u->shell; }
+      av[n++] = "-shell"; av[n++] = (char *)(u->shell ? u->shell : "/bin/zsh");
       av[n] = NULL;
       rc = spawn_wait(av, false);
       if (rc) {
         for (int i = 0; i < 5 && rc; ++i) {
-          if (user_exists(os, u->name)) rc = 0;
+          if (user_exists(os, username)) rc = 0;
           else sleep(1);
         }
       }
-      if (!rc && u->gid) {
-        char node[512]; snprintf(node, sizeof(node), "/Users/%s", u->name);
-        rc = runv(false, "dscl", ".", "-create", node, "PrimaryGroupID", u->gid, NULL);
+      if (!rc && (primary || u->gid)) {
+        char gid[32];
+        const char *value = u->gid;
+        if (primary) value = primary_backend;
+        char node[512]; snprintf(node, sizeof(node), "/Users/%s", username);
+        rc = runv(false, "dscl", ".", "-create", node, "PrimaryGroupID", value, NULL);
       }
     } else if (os == OS_WINDOWS) {
-      rc = runv(false, "net.exe", "user", u->name, "/add", NULL);
+      rc = runv(false, "net.exe", "user", username, u->password ? u->password : "", "/add", NULL);
     } else rc = 2;
     if (rc) return rc;
+    if (os == OS_LINUX && (rc = set_password(os, username, u->password ? u->password : ""))) return rc;
   } else {
     int rc = 0;
     if (os == OS_LINUX) {
-      if (u->home && (rc = runv(false, "usermod", "-d", u->home, u->name, NULL))) return rc;
-      if (u->shell && (rc = runv(false, "usermod", "-s", u->shell, u->name, NULL))) return rc;
-      if (u->uid && (rc = runv(false, "usermod", "-u", u->uid, u->name, NULL))) return rc;
-      if (u->gid && (rc = runv(false, "usermod", "-g", u->gid, u->name, NULL))) return rc;
+      if (u->home && (rc = runv(false, "usermod", "-d", u->home, username, NULL))) return rc;
+      if (u->shell && (rc = runv(false, "usermod", "-s", u->shell, username, NULL))) return rc;
+      if (u->uid && (rc = runv(false, "usermod", "-u", u->uid, username, NULL))) return rc;
+      if (primary && (rc = runv(false, "usermod", "-g", primary_backend, username, NULL))) return rc;
+      else if (u->gid && (rc = runv(false, "usermod", "-g", u->gid, username, NULL))) return rc;
     } else if (os == OS_MACOS) {
-      char node[512]; snprintf(node, sizeof(node), "/Users/%s", u->name);
+      char node[512]; snprintf(node, sizeof(node), "/Users/%s", username);
       if (u->home && (rc = runv(false, "dscl", ".", "-create", node, "NFSHomeDirectory", u->home, NULL))) return rc;
       if (u->shell && (rc = runv(false, "dscl", ".", "-create", node, "UserShell", u->shell, NULL))) return rc;
       if (u->uid && (rc = runv(false, "dscl", ".", "-create", node, "UniqueID", u->uid, NULL))) return rc;
-      if (u->gid && (rc = runv(false, "dscl", ".", "-create", node, "PrimaryGroupID", u->gid, NULL))) return rc;
+      if (primary) {
+        if ((rc = runv(false, "dscl", ".", "-create", node, "PrimaryGroupID", primary_backend, NULL))) return rc;
+      } else if (u->gid && (rc = runv(false, "dscl", ".", "-create", node, "PrimaryGroupID", u->gid, NULL))) return rc;
     }
+    if (u->password && (rc = set_password(os, username, u->password))) return rc;
   }
 
   for (int i = 0; i < u->group_count; ++i) {
-    int rc = add_membership(os, u->name, u->groups[i]);
+    int rc = add_membership(os, username, u->groups[i]);
     if (rc) return rc;
   }
   return 0;
@@ -442,7 +596,7 @@ static void usage(FILE *f) {
   fprintf(f,
     "sysperm - cross-platform users, groups and filesystem permissions\n\n"
     "Usage:\n"
-    "  sysperm user NAME [--absent] [--group GROUP]... [--home PATH] [--shell PATH] [--uid N] [--gid N] [--no-private-group]\n"
+    "  sysperm user NAME [-g GROUP,...] [-pg GROUP] [-p TEXT] [--home PATH] [--shell PATH] [--uid N] [--absent]\n"
     "  sysperm group NAME [--absent] [--gid N]\n"
     "  sysperm perm PATH EXPR... [--no-recursive] [--no-setgid]\n"
     "  sysperm os\n\n"
@@ -453,7 +607,26 @@ static void usage(FILE *f) {
     "  user:alice+rw               add/grant named ACL rights\n"
     "  user:alice-                 remove named ACL entry on Linux\n\n"
     "Defaults: recursive permission changes; Linux directory setgid; a newly\n"
-    "created user gets a same-name group unless --no-private-group is used.\n");
+    "created user gets a same-name primary group and an empty password by default;\n"
+    "the first -g group is primary unless -pg overrides it. Existing users keep\n"
+    "unspecified attributes unchanged. Default shell: /bin/sh Linux, /bin/zsh macOS.\n");
+}
+
+static int add_groups_csv(UserSpec *u, const char *csv) {
+  const char *p = csv;
+  while (*p) {
+    const char *comma = strchr(p, ',');
+    size_t n = comma ? (size_t)(comma - p) : strlen(p);
+    if (!n || u->group_count >= MAX_GROUPS) return 2;
+    char *g = malloc(n + 1);
+    if (!g) return 2;
+    memcpy(g, p, n);
+    g[n] = 0;
+    u->groups[u->group_count++] = g;
+    if (!comma) break;
+    p = comma + 1;
+  }
+  return 0;
 }
 
 static const char *need_arg(int argc, char **argv, int *i, const char *opt) {
@@ -488,9 +661,12 @@ int main(int argc, char **argv) {
       else if (!strcmp(argv[i], "--shell")) u.shell = need_arg(argc, argv, &i, "--shell");
       else if (!strcmp(argv[i], "--uid")) u.uid = need_arg(argc, argv, &i, "--uid");
       else if (!strcmp(argv[i], "--gid")) u.gid = need_arg(argc, argv, &i, "--gid");
-      else if (!strcmp(argv[i], "--group")) {
-        if (u.group_count >= MAX_GROUPS) { fprintf(stderr, "sysperm: too many groups\n"); return 2; }
-        u.groups[u.group_count++] = need_arg(argc, argv, &i, "--group");
+      else if (!strcmp(argv[i], "--password") || !strcmp(argv[i], "-p")) u.password = need_arg(argc, argv, &i, argv[i]);
+      else if (!strcmp(argv[i], "--groups") || !strcmp(argv[i], "--group") || !strcmp(argv[i], "-g")) {
+        const char *csv = need_arg(argc, argv, &i, argv[i]);
+        if (add_groups_csv(&u, csv)) { fprintf(stderr, "sysperm: invalid or too many groups\n"); return 2; }
+      } else if (!strcmp(argv[i], "--primary-group") || !strcmp(argv[i], "-pg")) {
+        u.primary_group = need_arg(argc, argv, &i, argv[i]);
       } else if (!strcmp(argv[i], "--no-private-group")) u.private_group = false;
       else { fprintf(stderr, "sysperm: unknown option %s\n", argv[i]); return 2; }
     }

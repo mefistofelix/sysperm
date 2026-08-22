@@ -11,10 +11,10 @@ function Cleanup {
 }
 
 try {
-  & $bin group $group
-  if ($LASTEXITCODE) { throw 'group create failed' }
-  & $bin user $user --group $group
+  & $bin user $user -g $group -p 'sysperm-ci-password'
   if ($LASTEXITCODE) { throw 'user create failed' }
+  & $bin user $user -p 'sysperm-ci-password-2'
+  if ($LASTEXITCODE) { throw 'password reset failed' }
   net user $user | Out-Null
   $members = net localgroup $group
   if (-not ($members -match $user)) { throw 'membership missing' }

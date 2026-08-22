@@ -8,7 +8,9 @@ The intent is declarative and idempotent: commands describe the state that shoul
 
 ```sh
 sysperm user app
-sysperm user app --group web --group logs
+sysperm user app -g web,logs
+sysperm user app -g web,logs -pg logs
+sysperm user app -p 'temporary-password'
 sysperm user app --home /srv/app --shell /bin/false
 sysperm user app --absent
 
@@ -19,7 +21,13 @@ sysperm group deploy --absent
 
 `user NAME` ensures that the account exists. If it already exists, only attributes explicitly present on the command line are changed; unspecified attributes are left untouched.
 
-A newly-created user gets a same-name group by default. `--no-private-group` disables that behavior. Every group named with `--group` is ensured automatically before membership is added.
+A newly-created Unix user gets a same-name primary group by default when no groups are supplied. `-g` / `--groups` accepts a comma-separated list; every named group is ensured automatically and the first group becomes primary. `-pg` / `--primary-group` overrides the primary group and also ensures a named group exists. On an existing user, passing `-g` likewise makes its first group primary unless `-pg` is supplied. Windows has no equivalent Unix primary-group attribute, so the groups are memberships there.
+
+Group references use one convention everywhere: a platform-native ID is recognized automatically, otherwise the value is a name. On Linux and macOS an all-decimal value is treated as a GID; on Windows an `S-1-...` value is recognized as a SID. The backend then selects the native command form actually supported by the chosen system utility. Linux `useradd`/`usermod` accept names or numeric GIDs directly. macOS primary groups can be set by numeric GID, while `dseditgroup` membership requires a group name. Windows account and membership management deliberately depends only on `net.exe`; because `net localgroup` has no SID membership form, SID group membership is not supported. No PowerShell fallback is used.
+
+`-p` / `--password` accepts a clear-text password for creation or reset. New users default to an empty password when `-p` is omitted; existing users keep their password unchanged unless `-p` is explicitly supplied. Passing an empty string explicitly resets an existing user's password to empty. Because the password is supplied as a command-line argument, callers should account for shell history and process-argument visibility.
+
+For new users, the default shell is `/bin/sh` on Linux and `/bin/zsh` on macOS. Existing users keep their current shell unless `--shell` is explicitly supplied. Windows has no shell attribute in this abstraction.
 
 `group NAME` has the equivalent ensure-present behavior, while `--absent` means ensure absent.
 
