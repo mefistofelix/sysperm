@@ -45,6 +45,10 @@ grep -q '^+ usermod ' "$ERR"
 rm -f "$ERR"
 if [ "$(id -u)" -eq 0 ]; then shadow=$(getent shadow "$U" | cut -d: -f2); else shadow=$(sudo getent shadow "$U" | cut -d: -f2); fi
 test -n "$shadow"
+# Execute under the local account and preserve argv/stdout/exit status.
+out=$(sudo_sysperm exec "$U" -- /bin/sh -c 'printf "%s:%s" "$(id -un)" "$1"' sh 'arg with spaces')
+test "$out" = "$U:arg with spaces"
+if sudo_sysperm exec "$U" -- /bin/sh -c 'exit 23'; then exit 1; else test $? -eq 23; fi
 
 mkdir -p "$ROOT/sub"
 touch "$ROOT/sub/file"

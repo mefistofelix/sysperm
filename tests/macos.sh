@@ -25,6 +25,9 @@ for _ in 1 2 3 4 5; do
   sleep 1
 done
 dseditgroup -o checkmember -m "$U" "$G" | grep -qi yes
+out=$(sudo "$BIN" exec "$U" -- /bin/sh -c 'printf "%s:%s" "$(id -un)" "$1"' sh 'arg with spaces')
+test "$out" = "$U:arg with spaces"
+if sudo "$BIN" exec "$U" -- /bin/sh -c 'exit 23'; then exit 1; else test $? -eq 23; fi
 
 mkdir -p "$ROOT/sub"
 touch "$ROOT/sub/file"

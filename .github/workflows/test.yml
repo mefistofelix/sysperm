@@ -25,8 +25,9 @@ jobs:
           cp src/main.c /tmp/sysperm-main.c
           cp tests/identity.c src/main.c
           bash ./build.sh
-          mv sysperm.exe tests/identity.exe
+          cp sysperm.exe tests/identity.exe
           cp /tmp/sysperm-main.c src/main.c
+          bash ./build.sh
           ./tests/identity.exe root
           ./tests/identity.exe "$USER"
 
@@ -74,8 +75,9 @@ jobs:
           cp src/main.c /tmp/sysperm-main.c
           cp tests/identity.c src/main.c
           bash ./build.sh
-          mv sysperm.exe tests/identity.exe
+          cp sysperm.exe tests/identity.exe
           cp /tmp/sysperm-main.c src/main.c
+          bash ./build.sh
           ./tests/identity.exe root
           ./tests/identity.exe nobody
       - name: Test Linux distro families with Docker

@@ -1,6 +1,8 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <grp.h>
+#include <pwd.h>
 #include <spawn.h>
 #include <stdbool.h>
 #include <stdarg.h>
@@ -608,6 +610,22 @@ static int acl_walk(Os os, const char *path, const char *expr, bool recursive) {
   return rc;
 }
 
+static int run_as_user(Os os, const char *user, char **command) {
+  if (!command[0]) return 2;
+  if (os == OS_WINDOWS) {
+    fprintf(stderr, "sysperm: Windows exec requires native logon support\n");
+    return 2;
+  }
+  struct passwd *pw = getpwnam(user);
+  if (!pw) { fprintf(stderr, "sysperm: local user %s was not found\n", user); return 2; }
+  if (initgroups(pw->pw_name, pw->pw_gid)) { perror("sysperm: initgroups"); return 1; }
+  if (setgid(pw->pw_gid)) { perror("sysperm: setgid"); return 1; }
+  if (setuid(pw->pw_uid)) { perror("sysperm: setuid"); return 1; }
+  execvp(command[0], command);
+  fprintf(stderr, "sysperm: cannot exec %s: %s\n", command[0], strerror(errno));
+  return 127;
+}
+
 static int ensure_perm(Os os, const PermSpec *p) {
   for (int i = 0; i < p->expr_count; ++i) {
     const char *e = p->exprs[i];
@@ -640,6 +658,7 @@ static void usage(FILE *f) {
     "  sysperm user NAME [-g GROUP,...] [-pg GROUP] [-p TEXT] [--home PATH] [--shell PATH] [--uid N] [--absent]\n"
     "  sysperm group NAME [--absent] [--gid N]\n"
     "  sysperm perm PATH EXPR... [--no-recursive] [--no-setgid]\n"
+    "  sysperm exec USER -- COMMAND [ARG...]\n"
     "  sysperm os\n\n"
     "Global options:\n"
     "  -v, --verbose                 show native commands and their output\n\n"
@@ -724,6 +743,11 @@ int main(int argc, char **argv) {
       else { fprintf(stderr, "sysperm: unknown option %s\n", argv[i]); return 2; }
     }
     return ensure_user(os, &u);
+  }
+
+  if (!strcmp(argv[1], "exec")) {
+    if (argc < 5 || strcmp(argv[3], "--")) { usage(stderr); return 2; }
+    return run_as_user(os, argv[2], &argv[4]);
   }
 
   if (!strcmp(argv[1], "perm")) {
