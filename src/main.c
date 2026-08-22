@@ -21,6 +21,8 @@ extern char **environ;
 
 typedef enum { OS_LINUX, OS_MACOS, OS_WINDOWS, OS_OTHER } Os;
 
+static bool verbose;
+
 typedef struct {
   const char *name;
   bool absent;
@@ -65,12 +67,19 @@ static const char *os_name(Os os) {
   }
 }
 
+static void print_command(char *const argv[]) {
+  fprintf(stderr, "+");
+  for (int i = 0; argv[i]; ++i) fprintf(stderr, " %s", argv[i]);
+  fputc('\n', stderr);
+}
+
 static int spawn_wait(char *const argv[], bool quiet) {
   pid_t pid;
   posix_spawn_file_actions_t fa;
   posix_spawn_file_actions_init(&fa);
   int nullfd = -1;
-  if (quiet) {
+  if (verbose) print_command(argv);
+  if (quiet && !verbose) {
     nullfd = open("/dev/null", O_WRONLY);
     if (nullfd >= 0) {
       posix_spawn_file_actions_adddup2(&fa, nullfd, STDOUT_FILENO);
@@ -88,10 +97,8 @@ static int spawn_wait(char *const argv[], bool quiet) {
   if (waitpid(pid, &status, 0) < 0) return 127;
   if (WIFEXITED(status)) {
     int code = WEXITSTATUS(status);
-    if (code && !quiet) {
-      fprintf(stderr, "sysperm: command failed (%d):", code);
-      for (int i = 0; argv[i]; ++i) fprintf(stderr, " %s", argv[i]);
-      fputc('\n', stderr);
+    if (code && !quiet && verbose) {
+      fprintf(stderr, "sysperm: command exited with status %d\n", code);
     }
     return code;
   }
@@ -111,7 +118,8 @@ static int spawn_wait_input(char *const argv[], const char *input, bool quiet) {
   posix_spawn_file_actions_init(&fa);
   posix_spawn_file_actions_adddup2(&fa, fds[0], STDIN_FILENO);
   int nullfd = -1;
-  if (quiet) {
+  if (verbose) print_command(argv);
+  if (quiet && !verbose) {
     nullfd = open("/dev/null", O_WRONLY);
     if (nullfd >= 0) {
       posix_spawn_file_actions_adddup2(&fa, nullfd, STDOUT_FILENO);
@@ -129,6 +137,7 @@ static int spawn_wait_input(char *const argv[], const char *input, bool quiet) {
 }
 
 static int spawn_capture(char *const argv[], char *out, size_t out_size) {
+  if (verbose) print_command(argv);
   int fds[2];
   if (pipe(fds)) return 127;
   pid_t pid;
@@ -150,6 +159,25 @@ static int spawn_capture(char *const argv[], char *out, size_t out_size) {
   int status = 0;
   if (waitpid(pid, &status, 0) < 0) return 127;
   return WIFEXITED(status) ? WEXITSTATUS(status) : 128;
+}
+
+static int tool_error(Os os, const char *operation, int rc) {
+  if (!rc) return 0;
+  if (rc == 127) fprintf(stderr, "sysperm: %s failed: required system tool could not be run\n", operation);
+  else if (os == OS_WINDOWS && rc == 5) fprintf(stderr, "sysperm: %s failed: access denied; administrator privileges are required\n", operation);
+  else if (os == OS_WINDOWS && rc == 2) fprintf(stderr, "sysperm: %s failed: the requested account, group, or resource was not found\n", operation);
+  else if (os == OS_LINUX && rc == 4) fprintf(stderr, "sysperm: %s failed: requested ID is already in use\n", operation);
+  else if (os == OS_LINUX && rc == 6) fprintf(stderr, "sysperm: %s failed: requested account or group does not exist\n", operation);
+  else if (os == OS_LINUX && rc == 8) fprintf(stderr, "sysperm: %s failed: account or group is currently in use\n", operation);
+  else if (os == OS_LINUX && rc == 9) fprintf(stderr, "sysperm: %s failed: requested account or group already exists\n", operation);
+  else if (os == OS_LINUX && rc == 10) fprintf(stderr, "sysperm: %s failed: system account/group database could not be updated\n", operation);
+  else if (os == OS_LINUX && rc == 12) fprintf(stderr, "sysperm: %s failed: home directory could not be created or removed\n", operation);
+  else fprintf(stderr, "sysperm: %s failed (system tool exit status %d)\n", operation, rc);
+  return rc;
+}
+
+static int tool_result(Os os, const char *operation, int rc) {
+  return rc ? tool_error(os, operation, rc) : 0;
 }
 
 static int runv(bool quiet, const char *a0, ...) {
@@ -213,30 +241,30 @@ static int ensure_group(Os os, const GroupSpec *g) {
   bool exists = group_exists(os, g->name);
   if (g->absent) {
     if (!exists) return 0;
-    if (os == OS_LINUX) return runv(false, "groupdel", g->name, NULL);
-    if (os == OS_MACOS) return runv(false, "dseditgroup", "-o", "delete", g->name, NULL);
-    if (os == OS_WINDOWS) return runv(false, "net.exe", "localgroup", g->name, "/delete", NULL);
+    if (os == OS_LINUX) return tool_result(os, "group deletion", runv(false, "groupdel", g->name, NULL));
+    if (os == OS_MACOS) return tool_result(os, "group deletion", runv(false, "dseditgroup", "-o", "delete", g->name, NULL));
+    if (os == OS_WINDOWS) return tool_result(os, "group deletion", runv(false, "net.exe", "localgroup", g->name, "/delete", NULL));
     return 2;
   }
 
   if (!exists) {
     if (os == OS_LINUX) {
-      if (g->gid) return runv(false, "groupadd", "-g", g->gid, g->name, NULL);
-      return runv(false, "groupadd", g->name, NULL);
+      if (g->gid) return tool_result(os, "group creation", runv(false, "groupadd", "-g", g->gid, g->name, NULL));
+      return tool_result(os, "group creation", runv(false, "groupadd", g->name, NULL));
     }
     if (os == OS_MACOS) {
-      if (g->gid) return runv(false, "dseditgroup", "-o", "create", "-i", g->gid, g->name, NULL);
-      return runv(false, "dseditgroup", "-o", "create", g->name, NULL);
+      if (g->gid) return tool_result(os, "group creation", runv(false, "dseditgroup", "-o", "create", "-i", g->gid, g->name, NULL));
+      return tool_result(os, "group creation", runv(false, "dseditgroup", "-o", "create", g->name, NULL));
     }
-    if (os == OS_WINDOWS) return runv(false, "net.exe", "localgroup", g->name, "/add", NULL);
+    if (os == OS_WINDOWS) return tool_result(os, "group creation", runv(false, "net.exe", "localgroup", g->name, "/add", NULL));
     return 2;
   }
 
   if (g->gid) {
-    if (os == OS_LINUX) return runv(false, "groupmod", "-g", g->gid, g->name, NULL);
+    if (os == OS_LINUX) return tool_result(os, "group modification", runv(false, "groupmod", "-g", g->gid, g->name, NULL));
     if (os == OS_MACOS) {
       char node[512]; snprintf(node, sizeof(node), "/Groups/%s", g->name);
-      return runv(false, "dscl", ".", "-create", node, "PrimaryGroupID", g->gid, NULL);
+      return tool_result(os, "group modification", runv(false, "dscl", ".", "-create", node, "PrimaryGroupID", g->gid, NULL));
     }
   }
   return 0;
@@ -265,24 +293,24 @@ static int set_password(Os os, const char *user, const char *password) {
     return 2;
   }
   if (os == OS_LINUX) {
-    if (!*password) return runv(false, "passwd", "-d", user, NULL);
+    if (!*password) return tool_result(os, "password clearing", runv(false, "passwd", "-d", user, NULL));
     char line[4096];
     int n = snprintf(line, sizeof(line), "%s:%s\n", user, password);
     if (n < 0 || (size_t)n >= sizeof(line)) return 2;
     char *av[] = {"chpasswd", NULL};
-    return spawn_wait_input(av, line, false);
+    return tool_result(os, "password change", spawn_wait_input(av, line, false));
   }
   if (os == OS_MACOS) {
     char node[512];
     snprintf(node, sizeof(node), "/Users/%s", user);
-    return runv(false, "dscl", ".", "-passwd", node, password, NULL);
+    return tool_result(os, "password change", runv(false, "dscl", ".", "-passwd", node, password, NULL));
   }
   if (os == OS_WINDOWS) {
     if (!*password) {
       int rc = runv(false, "net.exe", "user", user, "/passwordreq:no", NULL);
-      if (rc) return rc;
+      if (rc) return tool_error(os, "password policy update", rc);
     }
-    return runv(false, "net.exe", "user", user, password, "/Y", NULL);
+    return tool_error(os, "password change", runv(false, "net.exe", "user", user, password, "/Y", NULL));
   }
   return 2;
 }
@@ -299,13 +327,13 @@ static int add_membership(Os os, const char *user, const char *group) {
     int rc = ensure_group(os, &g);
     if (rc) return rc;
   }
-  if (os == OS_LINUX) return runv(false, "usermod", "-a", "-G", group, user, NULL);
-  if (os == OS_MACOS) return runv(false, "dseditgroup", "-o", "edit", "-a", user, "-t", "user", group, NULL);
+  if (os == OS_LINUX) return tool_result(os, "group membership update", runv(false, "usermod", "-a", "-G", group, user, NULL));
+  if (os == OS_MACOS) return tool_result(os, "group membership update", runv(false, "dseditgroup", "-o", "edit", "-a", user, "-t", "user", group, NULL));
   if (os == OS_WINDOWS && sid) {
     fprintf(stderr, "sysperm: net.exe localgroup does not provide a SID form for membership; use the group name\n");
     return 2;
   }
-  if (os == OS_WINDOWS) return runv(false, "net.exe", "localgroup", group, user, "/add", NULL);
+  if (os == OS_WINDOWS) return tool_result(os, "group membership update", runv(false, "net.exe", "localgroup", group, user, "/add", NULL));
   return 2;
 }
 
@@ -317,12 +345,12 @@ static int ensure_user(Os os, const UserSpec *u) {
   if (!primary && !exists && u->private_group && os != OS_WINDOWS) primary = u->name;
   if (u->absent) {
     if (!exists) return 0;
-    if (os == OS_LINUX) return runv(false, "userdel", username, NULL);
+    if (os == OS_LINUX) return tool_result(os, "user deletion", runv(false, "userdel", username, NULL));
     if (os == OS_MACOS) {
       char node[512]; snprintf(node, sizeof(node), "/Users/%s", username);
-      return runv(false, "dscl", ".", "-delete", node, NULL);
+      return tool_result(os, "user deletion", runv(false, "dscl", ".", "-delete", node, NULL));
     }
-    if (os == OS_WINDOWS) return runv(false, "net.exe", "user", username, "/delete", NULL);
+    if (os == OS_WINDOWS) return tool_result(os, "user deletion", runv(false, "net.exe", "user", username, "/delete", NULL));
     return 2;
   }
 
@@ -386,24 +414,24 @@ static int ensure_user(Os os, const UserSpec *u) {
         rc = runv(false, "net.exe", "user", username, "", "/add", "/passwordreq:no", "/Y", NULL);
       }
     } else rc = 2;
-    if (rc) return rc;
+    if (rc) return tool_error(os, "user creation", rc);
     if (os == OS_LINUX && (rc = set_password(os, username, u->password ? u->password : ""))) return rc;
   } else {
     int rc = 0;
     if (os == OS_LINUX) {
-      if (u->home && (rc = runv(false, "usermod", "-d", u->home, username, NULL))) return rc;
-      if (u->shell && (rc = runv(false, "usermod", "-s", u->shell, username, NULL))) return rc;
-      if (u->uid && (rc = runv(false, "usermod", "-u", u->uid, username, NULL))) return rc;
-      if (primary && (rc = runv(false, "usermod", "-g", primary_backend, username, NULL))) return rc;
-      else if (u->gid && (rc = runv(false, "usermod", "-g", u->gid, username, NULL))) return rc;
+      if (u->home && (rc = runv(false, "usermod", "-d", u->home, username, NULL))) return tool_error(os, "user home update", rc);
+      if (u->shell && (rc = runv(false, "usermod", "-s", u->shell, username, NULL))) return tool_error(os, "user shell update", rc);
+      if (u->uid && (rc = runv(false, "usermod", "-u", u->uid, username, NULL))) return tool_error(os, "user ID update", rc);
+      if (primary && (rc = runv(false, "usermod", "-g", primary_backend, username, NULL))) return tool_error(os, "primary group update", rc);
+      else if (u->gid && (rc = runv(false, "usermod", "-g", u->gid, username, NULL))) return tool_error(os, "primary group update", rc);
     } else if (os == OS_MACOS) {
       char node[512]; snprintf(node, sizeof(node), "/Users/%s", username);
-      if (u->home && (rc = runv(false, "dscl", ".", "-create", node, "NFSHomeDirectory", u->home, NULL))) return rc;
-      if (u->shell && (rc = runv(false, "dscl", ".", "-create", node, "UserShell", u->shell, NULL))) return rc;
-      if (u->uid && (rc = runv(false, "dscl", ".", "-create", node, "UniqueID", u->uid, NULL))) return rc;
+      if (u->home && (rc = runv(false, "dscl", ".", "-create", node, "NFSHomeDirectory", u->home, NULL))) return tool_error(os, "user home update", rc);
+      if (u->shell && (rc = runv(false, "dscl", ".", "-create", node, "UserShell", u->shell, NULL))) return tool_error(os, "user shell update", rc);
+      if (u->uid && (rc = runv(false, "dscl", ".", "-create", node, "UniqueID", u->uid, NULL))) return tool_error(os, "user ID update", rc);
       if (primary) {
-        if ((rc = runv(false, "dscl", ".", "-create", node, "PrimaryGroupID", primary_backend, NULL))) return rc;
-      } else if (u->gid && (rc = runv(false, "dscl", ".", "-create", node, "PrimaryGroupID", u->gid, NULL))) return rc;
+        if ((rc = runv(false, "dscl", ".", "-create", node, "PrimaryGroupID", primary_backend, NULL))) return tool_error(os, "primary group update", rc);
+      } else if (u->gid && (rc = runv(false, "dscl", ".", "-create", node, "PrimaryGroupID", u->gid, NULL))) return tool_error(os, "primary group update", rc);
     }
     if (u->password && (rc = set_password(os, username, u->password))) return rc;
   }
@@ -596,9 +624,12 @@ static int ensure_perm(Os os, const PermSpec *p) {
     } else if (os == OS_WINDOWS) {
       rc = windows_acl_apply_one(p->path, e, p->recursive);
     } else rc = 2;
-    if (rc) return rc;
+    if (rc) return tool_error(os, is_named_acl(e) ? "ACL update" : "permission update", rc);
   }
-  if (os == OS_LINUX && p->setgid_dirs) return setgid_walk(p->path, p->recursive);
+  if (os == OS_LINUX && p->setgid_dirs) {
+    int rc = setgid_walk(p->path, p->recursive);
+    if (rc) { fprintf(stderr, "sysperm: directory setgid update failed: %s\n", strerror(rc)); return rc; }
+  }
   return 0;
 }
 
@@ -610,6 +641,8 @@ static void usage(FILE *f) {
     "  sysperm group NAME [--absent] [--gid N]\n"
     "  sysperm perm PATH EXPR... [--no-recursive] [--no-setgid]\n"
     "  sysperm os\n\n"
+    "Global options:\n"
+    "  -v, --verbose                 show native commands and their output\n\n"
     "Permission expressions:\n"
     "  u+rwx g-w o=rx              standard chmod mode (Unix)\n"
     "  user:alice=rwx              named user ACL\n"
@@ -646,6 +679,16 @@ static const char *need_arg(int argc, char **argv, int *i, const char *opt) {
 
 int main(int argc, char **argv) {
   if (argc < 2) { usage(stderr); return 2; }
+  int first = 1;
+  while (first < argc && (!strcmp(argv[first], "-v") || !strcmp(argv[first], "--verbose"))) {
+    verbose = true;
+    ++first;
+  }
+  if (first >= argc) { usage(stderr); return 2; }
+  if (first != 1) {
+    for (int i = first; i < argc; ++i) argv[i - first + 1] = argv[i];
+    argc -= first - 1;
+  }
   Os os = host_os();
   if (!strcmp(argv[1], "--help") || !strcmp(argv[1], "help")) { usage(stdout); return 0; }
   if (!strcmp(argv[1], "os")) { puts(os_name(os)); return os == OS_OTHER ? 2 : 0; }

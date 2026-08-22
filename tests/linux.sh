@@ -37,6 +37,12 @@ if [ "$(id -u)" -eq 0 ]; then shadow=$(getent shadow "$U" | cut -d: -f2); else s
 test -z "$shadow"
 sudo_sysperm user "$U" -pg "$G2" -p sysperm-ci-password
 test "$(id -gn "$U")" = "$G2"
+# Native failures are summarized by default; verbose mode exposes the command.
+ERR=$(mktemp)
+if sudo_sysperm user "$U" --uid "$(id -u "$U")" 2>"$ERR"; then :; fi
+sudo_sysperm -v user "$U" --shell /bin/sh >/dev/null 2>"$ERR"
+grep -q '^+ usermod ' "$ERR"
+rm -f "$ERR"
 if [ "$(id -u)" -eq 0 ]; then shadow=$(getent shadow "$U" | cut -d: -f2); else shadow=$(sudo getent shadow "$U" | cut -d: -f2); fi
 test -n "$shadow"
 
