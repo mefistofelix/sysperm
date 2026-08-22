@@ -658,6 +658,16 @@ static char *win_command_line(char **argv) {
   return out;
 }
 
+static char16_t *utf8to16z(const char *s) {
+  size_t n = 0;
+  char16_t *p = utf8to16(s, strlen(s), &n);
+  if (!p) return NULL;
+  char16_t *q = realloc(p, (n + 1) * sizeof(*q));
+  if (!q) { free(p); return NULL; }
+  q[n] = 0;
+  return q;
+}
+
 typedef int32_t (__msabi *LogonUserWFn)(const char16_t *, const char16_t *,
                                         const char16_t *, uint32_t, uint32_t,
                                         int64_t *);
@@ -679,9 +689,9 @@ static int windows_run_as_user(const char *user, const char *password, char **co
   }
   char *cmd8 = win_command_line(command);
   if (!cmd8) return 2;
-  char16_t *u16 = utf8to16(user, strlen(user), NULL);
-  char16_t *p16 = utf8to16(password, strlen(password), NULL);
-  char16_t *c16 = utf8to16(cmd8, strlen(cmd8), NULL);
+  char16_t *u16 = utf8to16z(user);
+  char16_t *p16 = utf8to16z(password);
+  char16_t *c16 = utf8to16z(cmd8);
   free(cmd8);
   if (!u16 || !p16 || !c16) { free(u16); free(p16); free(c16); return 2; }
   int64_t token = 0;
