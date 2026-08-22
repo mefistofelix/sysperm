@@ -16,8 +16,6 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Install GNU make
-        run: brew install make
       - name: Build fat APE on macOS
         run: bash ./build.sh
       - name: Test macOS backend
@@ -32,7 +30,7 @@ jobs:
         uses: Vampire/setup-wsl@v7
         with:
           distribution: Ubuntu-24.04
-          additional-packages: make unzip tar curl coreutils binutils
+          additional-packages: unzip curl coreutils
       - name: Build fat APE in WSL
         shell: wsl-bash {0}
         run: |

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euxo pipefail
+set -euo pipefail
 BIN=${BIN:-./sysperm.exe}
 U=sysperm_ci_user
 G=sysperm_ci_group
@@ -24,7 +24,7 @@ mkdir -p "$ROOT/sub"
 touch "$ROOT/sub/file"
 sudo "$BIN" perm "$ROOT" 'u=rwX' 'g=rX' 'o='
 sudo "$BIN" perm "$ROOT" "user:$U+rx" --no-recursive
-ls -le "$ROOT" | grep -q "$U"
+ls -led "$ROOT" | grep -q "$U"
 
 sudo "$BIN" user "$U" --absent
 ! id "$U" >/dev/null 2>&1
