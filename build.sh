@@ -99,7 +99,7 @@ if [ ! -x "$COSMOCC/bin/cosmocc" ]; then
 
   toolroot="$unpack"
   if [ ! -f "$toolroot/bin/cosmocc" ]; then
-    candidate=$(find "$unpack" -type f -path '*/bin/cosmocc' -print -quit)
+    candidate=$(find "$unpack" -path '*/bin/cosmocc' -print -quit)
     [ -n "$candidate" ] || fail "unexpected cosmocc.zip layout"
     toolroot=$(cd -- "$(dirname -- "$candidate")/.." && pwd)
   fi
