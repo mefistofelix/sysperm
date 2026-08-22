@@ -187,7 +187,7 @@ static int ensure_user(Os os, const UserSpec *u) {
     return 2;
   }
 
-  if (!exists && u->private_group) {
+  if (!exists && u->private_group && os != OS_WINDOWS) {
     GroupSpec pg = {.name = u->name};
     int rc = ensure_group(os, &pg);
     if (rc) return rc;

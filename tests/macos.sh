@@ -9,7 +9,15 @@ trap cleanup EXIT
 
 sudo "$BIN" group "$G"
 sudo "$BIN" user "$U" --group "$G" --shell /bin/sh
+for _ in 1 2 3 4 5; do
+  id "$U" >/dev/null 2>&1 && break
+  sleep 1
+done
 id "$U" >/dev/null
+for _ in 1 2 3 4 5; do
+  dseditgroup -o checkmember -m "$U" "$G" | grep -qi yes && break
+  sleep 1
+done
 dseditgroup -o checkmember -m "$U" "$G" | grep -qi yes
 
 mkdir -p "$ROOT/sub"
