@@ -15,7 +15,7 @@ X86_DBG="$COSMO_SRC/o//examples/sysperm.dbg"
 ARM_DBG="$COSMO_SRC/o/aarch64/examples/sysperm.dbg"
 OUT="$ROOT/sysperm.exe"
 
-COSMOCC_URL="https://cosmo.zip/pub/cosmos/zip/cosmocc.zip"
+COSMOCC_URL="https://cosmo.zip/pub/cosmocc/cosmocc.zip"
 COSMO_SOURCE_URL="https://github.com/jart/cosmopolitan/archive/refs/heads/master.tar.gz"
 HOST_OS=$(uname -s 2>/dev/null || true)
 JOBS=${JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || printf '4')}

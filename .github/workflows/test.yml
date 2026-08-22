@@ -56,11 +56,6 @@ jobs:
         run: chmod +x sysperm.exe tests/linux.sh && BIN=./sysperm.exe bash ./tests/linux.sh
       - name: Test Linux distro families with Docker
         run: chmod +x tests/linux-docker.sh && bash ./tests/linux-docker.sh
-      - name: Prepare release executable
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          chmod 0755 sysperm.exe
-          tar -czf sysperm.exe.tar.gz sysperm.exe
       - name: Create or update tag release
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -68,4 +63,4 @@ jobs:
         run: |
           TAG="$GITHUB_REF_NAME"
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes
-          gh release upload "$TAG" sysperm.exe sysperm.exe.tar.gz --clobber
+          gh release upload "$TAG" sysperm.exe --clobber
