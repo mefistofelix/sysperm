@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build fat APE
-        run: ./build.sh
+        run: bash ./build.sh
       - uses: actions/upload-artifact@v4
         with:
           name: sysperm-ape
