@@ -670,9 +670,9 @@ static int windows_run_as_user(const char *user, const char *password, char **co
     fprintf(stderr, "sysperm: Windows exec requires -p PASSWORD\n");
     return 2;
   }
-  void *advapi = cosmo_dlopen("advapi32.dll", RTLD_LAZY);
-  LogonUserWFn logon = advapi ? (LogonUserWFn)cosmo_dlsym(advapi, "LogonUserW") : NULL;
-  CreateProcessWithTokenWFn create = advapi ? (CreateProcessWithTokenWFn)cosmo_dlsym(advapi, "CreateProcessWithTokenW") : NULL;
+  int64_t advapi = LoadLibraryA("advapi32.dll");
+  LogonUserWFn logon = advapi ? (LogonUserWFn)GetProcAddress(advapi, "LogonUserW") : NULL;
+  CreateProcessWithTokenWFn create = advapi ? (CreateProcessWithTokenWFn)GetProcAddress(advapi, "CreateProcessWithTokenW") : NULL;
   if (!logon || !create) {
     fprintf(stderr, "sysperm: Windows native logon/process APIs are unavailable\n");
     return 127;
