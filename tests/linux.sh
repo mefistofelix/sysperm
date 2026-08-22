@@ -9,7 +9,9 @@ run_sysperm() {
   fi
 }
 sudo_sysperm() {
-  if [ -n "${APE_LOADER:-}" ]; then
+  if [ "$(id -u)" -eq 0 ]; then
+    run_sysperm "$@"
+  elif [ -n "${APE_LOADER:-}" ]; then
     sudo "$APE_LOADER" "$BIN" "$@"
   else
     sudo "$BIN" "$@"
@@ -21,7 +23,7 @@ done
 U=sysperm_ci_user
 G=sysperm_ci_group
 ROOT=${TMPDIR:-/tmp}/sysperm-ci-$$
-cleanup(){ sudo_sysperm user "$U" --absent >/dev/null 2>&1 || true; sudo_sysperm group "$G" --absent >/dev/null 2>&1 || true; sudo rm -rf "$ROOT"; }
+cleanup(){ sudo_sysperm user "$U" --absent >/dev/null 2>&1 || true; sudo_sysperm group "$G" --absent >/dev/null 2>&1 || true; if [ "$(id -u)" -eq 0 ]; then rm -rf "$ROOT"; else sudo rm -rf "$ROOT"; fi; }
 trap cleanup EXIT
 
 sudo_sysperm group "$G"
