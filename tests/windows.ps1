@@ -35,7 +35,7 @@ try {
   Set-Content -Path $stdinFile -Value 'stdin-value' -NoNewline
   $lines = @(
     '@echo off',
-    ('"' + $bin + '" -v exec ' + $user + ' -p "Sysperm-CI8!Next" -- cmd.exe /d /c "echo %USERNAME%" > "' + $whoFile + '" 2>&1'),
+    ('"' + $bin + '" exec ' + $user + ' -p "Sysperm-CI8!Next" -- whoami.exe > "' + $whoFile + '"'),
     ('"' + $bin + '" exec ' + $user + ' -p "Sysperm-CI8!Next" -- cmd.exe /d /c "echo stdout-value" > "' + $stdoutFile + '"'),
     ('"' + $bin + '" exec ' + $user + ' -p "Sysperm-CI8!Next" -- cmd.exe /v:on /d /c "set /p X=& echo !X!" < "' + $stdinFile + '" > "' + $stdinOutFile + '"'),
     ('"' + $bin + '" exec ' + $user + ' -p "Sysperm-CI8!Next" -- cmd.exe /d /c "exit 23"'),
@@ -51,7 +51,7 @@ try {
   for ($i = 0; $i -lt 60 -and -not (Test-Path $doneFile); $i++) { Start-Sleep -Milliseconds 500 }
   if (-not (Test-Path $doneFile)) { throw 'scheduled impersonation test timed out' }
   $who = (Get-Content $whoFile -Raw).Trim()
-  if ($who -ne $user) { throw "impersonated exec identity failed: $who" }
+  if (-not $who.ToLowerInvariant().EndsWith(('\' + $user).ToLowerInvariant())) { throw "impersonated exec identity failed: $who" }
   if ((Get-Content $stdoutFile -Raw).Trim() -ne 'stdout-value') { throw 'impersonated stdout inheritance failed' }
   if ((Get-Content $stdinOutFile -Raw).Trim() -ne 'stdin-value') { throw 'impersonated stdin inheritance failed' }
   if ((Get-Content $exitFile -Raw).Trim() -ne '23') { throw 'impersonated exec exit code failed' }
