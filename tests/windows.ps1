@@ -67,9 +67,9 @@ try {
   if ((Get-Content $stdinOutFile -Raw).Trim() -ne 'stdin-value') { throw 'impersonated stdin inheritance failed' }
   $exitValue = (Get-Content $exitFile -Raw).Trim()
   if ($exitValue -ne '23') { throw "impersonated exec exit code failed: $exitValue" }
-  if (-not (Test-Path $emptyWhoFile)) { throw ('empty-password exec failed: ' + (Get-Content $emptyStatusFile -Raw)) }
-  $emptyWho = (Get-Content $emptyWhoFile -Raw).Trim()
-  if (-not $emptyWho.ToLowerInvariant().EndsWith(('\' + $user).ToLowerInvariant())) { throw "empty-password exec failed: $emptyWho" }
+  $emptyStatus = (Get-Content $emptyStatusFile -Raw)
+  $emptyWho = if (Test-Path $emptyWhoFile) { (Get-Content $emptyWhoFile -Raw).Trim() } else { '' }
+  if (-not $emptyWho -or -not $emptyWho.ToLowerInvariant().EndsWith(('\' + $user).ToLowerInvariant())) { throw "empty-password exec failed: who=[$emptyWho] status=[$emptyStatus]" }
 
   New-Item -ItemType Directory -Path $root | Out-Null
   New-Item -ItemType Directory -Path (Join-Path $root 'sub') | Out-Null
