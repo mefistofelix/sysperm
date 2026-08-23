@@ -32,6 +32,8 @@ extern char **environ;
 #define MAX_GROUPS 32
 
 typedef enum { OS_LINUX, OS_MACOS, OS_WINDOWS, OS_OTHER } Os;
+typedef uint32_t (*NetUserSetInfoFn)(const char16_t *, const char16_t *,
+                                     uint32_t, unsigned char *, uint32_t *);
 
 static bool verbose;
 
@@ -299,6 +301,32 @@ static int mac_group_gid(const char *group, char gid[32]) {
   return 0;
 }
 
+static char16_t *utf8to16z(const char *s);
+
+static int windows_set_password(const char *user, const char *password) {
+  void *netapi = cosmo_dlopen("netapi32.dll", RTLD_LAZY);
+  void *raw = netapi ? cosmo_dlsym(netapi, "NetUserSetInfo") : NULL;
+  NetUserSetInfoFn setinfo = raw ? (NetUserSetInfoFn)cosmo_dltramp(raw) : NULL;
+  if (!setinfo) {
+    fprintf(stderr, "sysperm: Windows password API is unavailable\n");
+    return 127;
+  }
+  char16_t *u16 = utf8to16z(user);
+  char16_t *p16 = utf8to16z(password);
+  if (!u16 || !p16) { free(u16); free(p16); return 2; }
+  struct { char16_t *password; } info = {p16};
+  uint32_t parm_error = 0;
+  uint32_t rc = setinfo(NULL, u16, 1003, (unsigned char *)&info, &parm_error);
+  free(u16); free(p16);
+  if (rc) {
+    fprintf(stderr, "sysperm: password change failed (Windows error %u", rc);
+    if (parm_error) fprintf(stderr, ", parameter %u", parm_error);
+    fprintf(stderr, ")\n");
+    return rc > 255 ? 1 : (int)rc;
+  }
+  return 0;
+}
+
 static int set_password(Os os, const char *user, const char *password) {
   if (strchr(password, '\n') || strchr(password, '\r')) {
     fprintf(stderr, "sysperm: password cannot contain a newline\n");
@@ -321,10 +349,8 @@ static int set_password(Os os, const char *user, const char *password) {
     if (!*password) {
       int rc = runv(false, "net.exe", "user", user, "/passwordreq:no", NULL);
       if (rc) return tool_error(os, "password policy update", rc);
-      char *av[] = {"net.exe", "user", (char *)user, "*", "/Y", NULL};
-      return tool_error(os, "password change", spawn_wait_input(av, "\n\n", false));
     }
-    return tool_error(os, "password change", runv(false, "net.exe", "user", user, password, "/Y", NULL));
+    return windows_set_password(user, password);
   }
   return 2;
 }
@@ -422,12 +448,9 @@ static int ensure_user(Os os, const UserSpec *u) {
         rc = runv(false, "dscl", ".", "-create", node, "PrimaryGroupID", value, NULL);
       }
     } else if (os == OS_WINDOWS) {
-      if (u->password && *u->password) {
-        rc = runv(false, "net.exe", "user", username, u->password, "/add", "/Y", NULL);
-      } else {
-        char *av[] = {"net.exe", "user", (char *)username, "*", "/add", "/passwordreq:no", "/Y", NULL};
-        rc = spawn_wait_input(av, "\n\n", false);
-      }
+      const char *initial = u->password && *u->password ? u->password : "Sysperm-Temporary9!";
+      rc = runv(false, "net.exe", "user", username, initial, "/add", "/Y", NULL);
+      if (!rc && (!u->password || !*u->password)) rc = set_password(os, username, "");
     } else rc = 2;
     if (rc) return tool_error(os, "user creation", rc);
     if (os == OS_LINUX && (rc = set_password(os, username, u->password ? u->password : ""))) return rc;
