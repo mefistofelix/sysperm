@@ -68,7 +68,8 @@ try {
   $exitValue = (Get-Content $exitFile -Raw).Trim()
   if ($exitValue -ne '23') { throw "impersonated exec exit code failed: $exitValue" }
   $emptyStatus = (Get-Content $emptyStatusFile -Raw)
-  $emptyWho = if (Test-Path $emptyWhoFile) { (Get-Content $emptyWhoFile -Raw).Trim() } else { '' }
+  $emptyRaw = if (Test-Path $emptyWhoFile) { Get-Content $emptyWhoFile -Raw } else { $null }
+  $emptyWho = if ($null -eq $emptyRaw) { '' } else { $emptyRaw.Trim() }
   if (-not $emptyWho -or -not $emptyWho.ToLowerInvariant().EndsWith(('\' + $user).ToLowerInvariant())) { throw "empty-password exec failed: who=[$emptyWho] status=[$emptyStatus]" }
 
   New-Item -ItemType Directory -Path $root | Out-Null
