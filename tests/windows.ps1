@@ -39,6 +39,13 @@ try {
   $members = net localgroup $group
   if (-not ($members -match $user)) { throw 'membership missing' }
 
+  # Prove empty-password reset and password-preserving upsert before the SYSTEM
+  # impersonation task. PowerShell passes the empty argv element unambiguously.
+  & $bin user $user -p ''
+  if ($LASTEXITCODE) { throw 'explicit empty-password reset failed' }
+  & $bin user $user
+  if ($LASTEXITCODE) { throw 'empty-password preserving upsert failed' }
+
   # Hosted Windows administrators do not carry SeAssignPrimaryTokenPrivilege.
   # Run the impersonation checks as LocalSystem so CreateProcessAsUserW is
   # tested under the privilege model sysperm documents for this operation.
@@ -50,11 +57,7 @@ try {
     ('"' + $bin + '" exec ' + $user + ' -p "Sysperm-CI8!Next" -- cmd.exe /v:on /d /c "set /p X=& echo !X!" < "' + $stdinFile + '" > "' + $stdinOutFile + '"'),
     ('"' + $bin + '" exec ' + $user + ' -p "Sysperm-CI8!Next" -- cmd.exe /d /c "exit /b 23"'),
     ('echo %ERRORLEVEL% > "' + $exitFile + '"'),
-    ('"' + $bin + '" user ' + $user + ' -p ""'),
-    ('echo reset=%ERRORLEVEL% > "' + $emptyStatusFile + '"'),
-    ('"' + $bin + '" user ' + $user),
-    ('echo upsert=%ERRORLEVEL% >> "' + $emptyStatusFile + '"'),
-    ('"' + $bin + '" -v exec ' + $user + ' -- whoami.exe > "' + $emptyWhoFile + '" 2>> "' + $emptyStatusFile + '"'),
+    ('"' + $bin + '" -v exec ' + $user + ' -- whoami.exe > "' + $emptyWhoFile + '" 2> "' + $emptyStatusFile + '"'),
     ('echo exec=%ERRORLEVEL% >> "' + $emptyStatusFile + '"'),
     ('echo done > "' + $doneFile + '"')
   )
