@@ -28,6 +28,8 @@ try {
   # logon. Disable that policy only for this runner so LogonUserW with an empty
   # password can be exercised end-to-end, then restore it in Cleanup.
   reg.exe add 'HKLM\SYSTEM\CurrentControlSet\Control\Lsa' /v LimitBlankPasswordUse /t REG_DWORD /d 0 /f | Out-Null
+  net.exe accounts /minpwlen:0 | Out-Null
+  if ($LASTEXITCODE) { throw 'cannot lower test minimum password length' }
   & $bin user $user -g $group -p 'Sysperm-CI9!Pass'
   if ($LASTEXITCODE) { throw 'user create failed' }
   & $bin user $user -p 'Sysperm-CI8!Next'
