@@ -18,7 +18,10 @@
 #include "libc/stdio/rand.h"
 #include "libc/dlopen/dlfcn.h"
 #include "libc/nt/accounting.h"
+#include "libc/nt/createfile.h"
 #include "libc/nt/dll.h"
+#include "libc/nt/enum/creationdisposition.h"
+#include "libc/nt/enum/fileflagandattributes.h"
 #include "libc/nt/enum/accessmask.h"
 #include "libc/nt/files.h"
 #include "libc/nt/privilege.h"
@@ -114,6 +117,16 @@ static void md5_digest(const unsigned char *data, size_t len, unsigned char out[
   for (int i=0;i<4;++i) for(int j=0;j<4;++j) out[i*4+j]=(unsigned char)(h[i]>>(8*j));
 }
 
+static char16_t *machine_path16(const char *s) {
+  size_t n = 0;
+  char16_t *p = utf8to16(s, strlen(s), &n);
+  if (!p) return NULL;
+  char16_t *q = realloc(p, (n + 1) * sizeof(*q));
+  if (!q) { free(p); return NULL; }
+  q[n] = 0;
+  return q;
+}
+
 static int machine_secret_path(Os os, char *dir, size_t dsz, char *path, size_t psz) {
   if (os == OS_LINUX) snprintf(dir, dsz, "/var/lib/sysperm");
   else if (os == OS_MACOS) snprintf(dir, dsz, "/var/db/sysperm");
@@ -129,6 +142,60 @@ static int machine_secret_path(Os os, char *dir, size_t dsz, char *path, size_t 
 static int load_machine_secret(Os os, unsigned char secret[32]) {
   char dir[1024], path[1200];
   if (machine_secret_path(os, dir, sizeof(dir), path, sizeof(path))) return 2;
+
+  if (os == OS_WINDOWS) {
+    char16_t *path16 = machine_path16(path);
+    if (!path16) return 2;
+    int64_t h = CreateFile(path16, kNtGenericRead, 1, NULL, kNtOpenExisting,
+                           kNtFileAttributeNormal, 0);
+    if (h != kNtInvalidHandleValue) {
+      uint32_t n = 0;
+      bool ok = ReadFile(h, secret, 32, &n, NULL);
+      CloseHandle(h);
+      free(path16);
+      if (ok && n == 32) return 0;
+      fprintf(stderr, "sysperm: invalid machine secret %s\n", path);
+      return 1;
+    }
+    uint32_t error = GetLastError();
+    free(path16);
+    if (error != 2 && error != 3) {
+      fprintf(stderr, "sysperm: cannot read machine secret %s (Windows error %u)\n", path, error);
+      return 1;
+    }
+    if (mkdir(dir, 0700) && errno != EEXIST) {
+      fprintf(stderr, "sysperm: cannot create %s: %s\n", dir, strerror(errno));
+      return 1;
+    }
+    int rc = runv(false, "icacls.exe", dir, "/inheritance:r", "/grant:r",
+                  "*S-1-5-18:(OI)(CI)(F)", "*S-1-5-32-544:(OI)(CI)(F)", NULL);
+    if (rc) return tool_error(os, "machine secret directory protection", rc);
+    if (getrandom(secret, 32, 0) != 32) {
+      fprintf(stderr, "sysperm: secure random generation failed\n");
+      return 1;
+    }
+    path16 = machine_path16(path);
+    if (!path16) return 2;
+    h = CreateFile(path16, kNtGenericWrite, 0, NULL, kNtCreateNew,
+                   kNtFileAttributeNormal, 0);
+    free(path16);
+    if (h == kNtInvalidHandleValue) {
+      error = GetLastError();
+      if (error == 80 || error == 183) return load_machine_secret(os, secret);
+      fprintf(stderr, "sysperm: cannot create machine secret %s (Windows error %u)\n", path, error);
+      return 1;
+    }
+    uint32_t n = 0;
+    bool ok = WriteFile(h, secret, 32, &n, NULL);
+    CloseHandle(h);
+    if (!ok || n != 32) {
+      unlink(path);
+      fprintf(stderr, "sysperm: cannot write machine secret\n");
+      return 1;
+    }
+    return 0;
+  }
+
   int fd = open(path, O_RDONLY);
   if (fd >= 0) {
     ssize_t n = read(fd, secret, 32); close(fd);
@@ -137,11 +204,7 @@ static int load_machine_secret(Os os, unsigned char secret[32]) {
   }
   if (errno != ENOENT) { fprintf(stderr, "sysperm: cannot read machine secret %s: %s\n", path, strerror(errno)); return 1; }
   if (mkdir(dir, 0700) && errno != EEXIST) { fprintf(stderr, "sysperm: cannot create %s: %s\n", dir, strerror(errno)); return 1; }
-  if (os != OS_WINDOWS && chmod(dir, 0700)) { perror("sysperm: machine secret directory chmod"); return 1; }
-  if (os == OS_WINDOWS) {
-    int rc = runv(false, "icacls.exe", dir, "/inheritance:r", "/grant:r", "*S-1-5-18:(F)", "*S-1-5-32-544:(F)", NULL);
-    if (rc) return tool_error(os, "machine secret directory protection", rc);
-  }
+  if (chmod(dir, 0700)) { perror("sysperm: machine secret directory chmod"); return 1; }
   if (getrandom(secret, 32, 0) != 32) { fprintf(stderr, "sysperm: secure random generation failed\n"); return 1; }
   fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
   if (fd < 0) {
@@ -150,7 +213,7 @@ static int load_machine_secret(Os os, unsigned char secret[32]) {
   }
   ssize_t n = write(fd, secret, 32); close(fd);
   if (n != 32) { unlink(path); fprintf(stderr, "sysperm: cannot write machine secret\n"); return 1; }
-  if (os != OS_WINDOWS && chmod(path, 0600)) { perror("sysperm: machine secret chmod"); return 1; }
+  if (chmod(path, 0600)) { perror("sysperm: machine secret chmod"); return 1; }
   return 0;
 }
 
