@@ -321,6 +321,8 @@ static int set_password(Os os, const char *user, const char *password) {
     if (!*password) {
       int rc = runv(false, "net.exe", "user", user, "/passwordreq:no", NULL);
       if (rc) return tool_error(os, "password policy update", rc);
+      char *av[] = {"net.exe", "user", (char *)user, "*", "/Y", NULL};
+      return tool_error(os, "password change", spawn_wait_input(av, "\n\n", false));
     }
     return tool_error(os, "password change", runv(false, "net.exe", "user", user, password, "/Y", NULL));
   }
@@ -423,7 +425,8 @@ static int ensure_user(Os os, const UserSpec *u) {
       if (u->password && *u->password) {
         rc = runv(false, "net.exe", "user", username, u->password, "/add", "/Y", NULL);
       } else {
-        rc = runv(false, "net.exe", "user", username, "", "/add", "/passwordreq:no", "/Y", NULL);
+        char *av[] = {"net.exe", "user", (char *)username, "*", "/add", "/passwordreq:no", "/Y", NULL};
+        rc = spawn_wait_input(av, "\n\n", false);
       }
     } else rc = 2;
     if (rc) return tool_error(os, "user creation", rc);
