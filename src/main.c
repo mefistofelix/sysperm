@@ -167,7 +167,7 @@ static int load_machine_secret(Os os, unsigned char secret[32]) {
       fprintf(stderr, "sysperm: cannot create %s: %s\n", dir, strerror(errno));
       return 1;
     }
-    int rc = runv(false, "icacls.exe", dir, "/inheritance:r", "/grant:r",
+    int rc = runv(true, "icacls.exe", dir, "/inheritance:r", "/grant:r",
                   "*S-1-5-18:(OI)(CI)(F)", "*S-1-5-32-544:(OI)(CI)(F)", NULL);
     if (rc) return tool_error(os, "machine secret directory protection", rc);
     if (getrandom(secret, 32, 0) != 32) {
