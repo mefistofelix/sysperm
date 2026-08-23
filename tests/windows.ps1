@@ -20,9 +20,14 @@ function Cleanup {
   Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
   schtasks.exe /Delete /TN $task /F 2>$null | Out-Null
   Remove-Item -Force $whoFile,$emptyWhoFile,$emptyStatusFile,$stdoutFile,$stdinFile,$stdinOutFile,$exitFile,$doneFile,$runner -ErrorAction SilentlyContinue
+  reg.exe add 'HKLM\SYSTEM\CurrentControlSet\Control\Lsa' /v LimitBlankPasswordUse /t REG_DWORD /d 1 /f 2>$null | Out-Null
 }
 
 try {
+  # Windows normally restricts blank-password local accounts to physical-console
+  # logon. Disable that policy only for this runner so LogonUserW with an empty
+  # password can be exercised end-to-end, then restore it in Cleanup.
+  reg.exe add 'HKLM\SYSTEM\CurrentControlSet\Control\Lsa' /v LimitBlankPasswordUse /t REG_DWORD /d 0 /f | Out-Null
   & $bin user $user -g $group -p 'Sysperm-CI9!Pass'
   if ($LASTEXITCODE) { throw 'user create failed' }
   & $bin user $user -p 'Sysperm-CI8!Next'
