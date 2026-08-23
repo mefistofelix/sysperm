@@ -27,6 +27,10 @@ ROOT=${TMPDIR:-/tmp}/sysperm-ci-$$
 cleanup(){ sudo_sysperm user "$U" --absent >/dev/null 2>&1 || true; sudo_sysperm group "$G" --absent >/dev/null 2>&1 || true; sudo_sysperm group "$G2" --absent >/dev/null 2>&1 || true; if [ "$(id -u)" -eq 0 ]; then rm -rf "$ROOT"; else sudo rm -rf "$ROOT"; fi; }
 trap cleanup EXIT
 
+AUTO1=$(sudo_sysperm pwd)
+AUTO2=$(sudo_sysperm pwd)
+test "$AUTO1" = "$AUTO2"
+test ${#AUTO1} -ge 30
 sudo_sysperm user "$U" -g "$G,$G2"
 getent passwd "$U" >/dev/null
 getent group "$G" | grep -q "$U"
@@ -34,7 +38,7 @@ getent group "$G2" | grep -q "$U"
 test "$(id -gn "$U")" = "$G"
 test "$(getent passwd "$U" | cut -d: -f7)" = /bin/sh
 if [ "$(id -u)" -eq 0 ]; then shadow=$(getent shadow "$U" | cut -d: -f2); else shadow=$(sudo getent shadow "$U" | cut -d: -f2); fi
-test -z "$shadow"
+test -n "$shadow"
 sudo_sysperm user "$U" -pg "$G2" -p sysperm-ci-password
 test "$(id -gn "$U")" = "$G2"
 # Native failures are summarized by default; verbose mode exposes the command.
@@ -52,6 +56,8 @@ if sudo_sysperm exec "$U" -- /bin/sh -c 'exit 23'; then exit 1; else test $? -eq
 
 mkdir -p "$ROOT/sub"
 touch "$ROOT/sub/file"
+sudo_sysperm chown "$U:$G" "$ROOT"
+test "$(stat -c '%U:%G' "$ROOT")" = "$U:$G"
 sudo_sysperm perm "$ROOT" 'u=rwX' 'g=rX' 'o='
 stat -c '%A' "$ROOT" | grep -q '^drw[rwx-]*'
 # Default Linux behavior: setgid on directories.

@@ -4,8 +4,7 @@ $user = 'sysperm_ci_user'
 $group = 'sysperm_ci_group'
 $root = Join-Path $env:TEMP ('sysperm-ci-' + $PID)
 $whoFile = Join-Path $env:PUBLIC ('sysperm-ci-' + $PID + '-who.txt')
-$emptyWhoFile = Join-Path $env:PUBLIC ('sysperm-ci-' + $PID + '-empty-who.txt')
-$emptyStatusFile = Join-Path $env:PUBLIC ('sysperm-ci-' + $PID + '-empty-status.txt')
+$blankStatusFile = Join-Path $env:PUBLIC ('sysperm-ci-' + $PID + '-blank-status.txt')
 $stdoutFile = Join-Path $env:PUBLIC ('sysperm-ci-' + $PID + '-stdout.txt')
 $stdinFile = Join-Path $env:PUBLIC ('sysperm-ci-' + $PID + '-stdin.txt')
 $stdinOutFile = Join-Path $env:PUBLIC ('sysperm-ci-' + $PID + '-stdinout.txt')
@@ -19,34 +18,22 @@ function Cleanup {
   & $bin group $group --absent 2>$null | Out-Null
   Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
   schtasks.exe /Delete /TN $task /F 2>$null | Out-Null
-  Remove-Item -Force $whoFile,$emptyWhoFile,$emptyStatusFile,$stdoutFile,$stdinFile,$stdinOutFile,$exitFile,$doneFile,$runner -ErrorAction SilentlyContinue
-  reg.exe add 'HKLM\SYSTEM\CurrentControlSet\Control\Lsa' /v LimitBlankPasswordUse /t REG_DWORD /d 1 /f 2>$null | Out-Null
+  Remove-Item -Force $whoFile,$blankStatusFile,$stdoutFile,$stdinFile,$stdinOutFile,$exitFile,$doneFile,$runner -ErrorAction SilentlyContinue
 }
 
 try {
-  # Windows normally restricts blank-password local accounts to physical-console
-  # logon. Disable that policy only for this runner so LogonUserW with an empty
-  # password can be exercised end-to-end, then restore it in Cleanup.
-  reg.exe add 'HKLM\SYSTEM\CurrentControlSet\Control\Lsa' /v LimitBlankPasswordUse /t REG_DWORD /d 0 /f | Out-Null
-  net.exe accounts /minpwlen:0 | Out-Null
-  if ($LASTEXITCODE) { throw 'cannot lower test minimum password length' }
-  & $bin user $user -g $group -p 'Sysperm-CI9!Pass'
-  if ($LASTEXITCODE) { throw 'user create failed' }
-  & $bin user $user -p 'Sysperm-CI8!Next'
-  if ($LASTEXITCODE) { throw 'password reset failed' }
-  # Omitting -p on an existing user must leave the password unchanged.
+  $auto1 = (& $bin pwd).Trim()
+  if ($LASTEXITCODE -or -not $auto1) { throw 'machine password lookup failed' }
+  $auto2 = (& $bin pwd).Trim()
+  if ($LASTEXITCODE -or $auto1 -ne $auto2) { throw 'machine password is not stable' }
+
+  & $bin user $user -g $group
+  if ($LASTEXITCODE) { throw 'automatic-password user create failed' }
   & $bin user $user
   if ($LASTEXITCODE) { throw 'password-preserving upsert failed' }
   net user $user | Out-Null
   $members = net localgroup $group
   if (-not ($members -match $user)) { throw 'membership missing' }
-
-  # Prove empty-password reset and password-preserving upsert before the SYSTEM
-  # impersonation task. PowerShell passes the empty argv element unambiguously.
-  & $bin user $user -p ''
-  if ($LASTEXITCODE) { throw 'explicit empty-password reset failed' }
-  & $bin user $user
-  if ($LASTEXITCODE) { throw 'empty-password preserving upsert failed' }
 
   # Hosted Windows administrators do not carry SeAssignPrimaryTokenPrivilege.
   # Run the impersonation checks as LocalSystem so CreateProcessAsUserW is
@@ -54,13 +41,13 @@ try {
   Set-Content -Path $stdinFile -Value 'stdin-value' -NoNewline
   $lines = @(
     '@echo off',
-    ('"' + $bin + '" exec ' + $user + ' -p "Sysperm-CI8!Next" -- whoami.exe > "' + $whoFile + '"'),
-    ('"' + $bin + '" exec ' + $user + ' -p "Sysperm-CI8!Next" -- cmd.exe /d /c "echo stdout-value" > "' + $stdoutFile + '"'),
-    ('"' + $bin + '" exec ' + $user + ' -p "Sysperm-CI8!Next" -- cmd.exe /v:on /d /c "set /p X=& echo !X!" < "' + $stdinFile + '" > "' + $stdinOutFile + '"'),
-    ('"' + $bin + '" exec ' + $user + ' -p "Sysperm-CI8!Next" -- cmd.exe /d /c "exit /b 23"'),
+    ('"' + $bin + '" exec ' + $user + ' -- whoami.exe > "' + $whoFile + '"'),
+    ('"' + $bin + '" exec ' + $user + ' -- cmd.exe /d /c "echo stdout-value" > "' + $stdoutFile + '"'),
+    ('"' + $bin + '" exec ' + $user + ' -- cmd.exe /v:on /d /c "set /p X=& echo !X!" < "' + $stdinFile + '" > "' + $stdinOutFile + '"'),
+    ('"' + $bin + '" exec ' + $user + ' -- cmd.exe /d /c "exit /b 23"'),
     ('echo %ERRORLEVEL% > "' + $exitFile + '"'),
-    ('"' + $bin + '" -v exec ' + $user + ' -- whoami.exe > "' + $emptyWhoFile + '" 2> "' + $emptyStatusFile + '"'),
-    ('echo exec=%ERRORLEVEL% >> "' + $emptyStatusFile + '"'),
+    ('"' + $bin + '" exec ' + $user + ' -p -- whoami.exe > NUL 2> "' + $blankStatusFile + '"'),
+    ('echo exec=%ERRORLEVEL% >> "' + $blankStatusFile + '"'),
     ('echo done > "' + $doneFile + '"')
   )
   Set-Content -Path $runner -Value $lines -Encoding Ascii
@@ -71,20 +58,24 @@ try {
   if ($LASTEXITCODE) { throw 'scheduled impersonation test launch failed' }
   for ($i = 0; $i -lt 60 -and -not (Test-Path $doneFile); $i++) { Start-Sleep -Milliseconds 500 }
   if (-not (Test-Path $doneFile)) { throw 'scheduled impersonation test timed out' }
+
   $who = (Get-Content $whoFile -Raw).Trim()
   if (-not $who.ToLowerInvariant().EndsWith(('\' + $user).ToLowerInvariant())) { throw "impersonated exec identity failed: $who" }
   if ((Get-Content $stdoutFile -Raw).Trim() -ne 'stdout-value') { throw 'impersonated stdout inheritance failed' }
   if ((Get-Content $stdinOutFile -Raw).Trim() -ne 'stdin-value') { throw 'impersonated stdin inheritance failed' }
   $exitValue = (Get-Content $exitFile -Raw).Trim()
   if ($exitValue -ne '23') { throw "impersonated exec exit code failed: $exitValue" }
-  $emptyStatus = (Get-Content $emptyStatusFile -Raw)
-  $emptyRaw = if (Test-Path $emptyWhoFile) { Get-Content $emptyWhoFile -Raw } else { $null }
-  $emptyWho = if ($null -eq $emptyRaw) { '' } else { $emptyRaw.Trim() }
-  if (-not $emptyWho -or -not $emptyWho.ToLowerInvariant().EndsWith(('\' + $user).ToLowerInvariant())) { throw "empty-password exec failed: who=[$emptyWho] status=[$emptyStatus]" }
+  $blankStatus = (Get-Content $blankStatusFile -Raw)
+  if ($blankStatus -notmatch 'invalid username or password' -or $blankStatus -notmatch 'exec=') {
+    throw "-p without value was not treated as blank password: [$blankStatus]"
+  }
 
   New-Item -ItemType Directory -Path $root | Out-Null
   New-Item -ItemType Directory -Path (Join-Path $root 'sub') | Out-Null
   Set-Content -Path (Join-Path $root 'sub\file.txt') -Value test
+  & $bin chown $user $root
+  if ($LASTEXITCODE) { throw 'ownership update failed' }
+  if (-not ((Get-Acl $root).Owner -match $user)) { throw 'ownership update missing' }
   & $bin perm $root "user:$user=rx"
   if ($LASTEXITCODE) { throw 'ACL grant failed' }
   $acl = Get-Acl $root

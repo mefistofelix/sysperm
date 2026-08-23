@@ -25,7 +25,7 @@ A newly-created Unix user gets a same-name primary group by default when no grou
 
 Group references use one convention everywhere: a platform-native ID is recognized automatically, otherwise the value is a name. On Linux and macOS an all-decimal value is treated as a GID; on Windows an `S-1-...` value is recognized as a SID. The backend then selects the native command form actually supported by the chosen system utility. Linux `useradd`/`usermod` accept names or numeric GIDs directly. macOS primary groups can be set by numeric GID, while `dseditgroup` membership requires a group name. Windows account and membership management deliberately depends only on `net.exe`; because `net localgroup` has no SID membership form, SID group membership is not supported. No PowerShell fallback is used.
 
-`-p` / `--password` accepts a clear-text password for creation or reset. New users default to an empty password when `-p` is omitted. Existing users keep their password unchanged unless `-p` is explicitly supplied; passing an empty string explicitly resets an existing user's password to empty. Because a non-empty password is supplied as a command-line argument, callers should account for shell history and process-argument visibility.
+`-p` / `-P` / `--password` accepts an optional clear-text password. `-p VALUE` uses that value; `-p` with no value means an explicitly empty password. For a newly-created user, omitting `-p` uses the stable machine password returned by `sysperm pwd`. Existing users still keep their password unchanged when `-p` is omitted. The machine password is derived from a random per-machine secret stored in an administrator-only location (`/var/lib/sysperm` on Linux, `/var/db/sysperm` on macOS, `%ProgramData%\\sysperm` on Windows), so all automatically-managed users on one machine share the same generated password. Because an explicit non-empty password is supplied as a command-line argument, callers should account for shell history and process-argument visibility.
 
 For new users, the default shell is `/bin/sh` on Linux and `/bin/zsh` on macOS. Existing users keep their current shell unless `--shell` is explicitly supplied. Windows has no shell attribute in this abstraction.
 
@@ -36,13 +36,15 @@ The caller is responsible for running `sysperm` with whatever privileges the req
 ## Execute as another local user
 
 ```sh
+sysperm pwd
 sysperm exec app -- program arg1 "arg with spaces"
 sysperm exec app -p 'password' -- program arg1
+sysperm exec app -p -- program arg1
 ```
 
 On Linux and macOS, `sysperm` resolves a local account, initializes its supplementary groups, switches GID/UID, and replaces itself with the requested program. The child therefore inherits the caller's stdin, stdout and stderr normally, including ordinary shell redirection, and its exit status becomes the `sysperm` exit status.
 
-On Windows, `-p` / `--password` is optional and defaults to the empty string. This makes local accounts maintained with the default empty password directly usable by `sysperm exec USER -- ...`. `sysperm` uses native Windows APIs (`LogonUserW`, `DuplicateTokenEx`, and `CreateProcessAsUserW`) and waits for the child, propagating its exit code. Standard input/output/error handles are inherited, so ordinary redirection around `sysperm` is also inherited by the launched process. Windows alternate-user process creation requires the caller token to hold the privileges required by `CreateProcessAsUserW`, notably `SeIncreaseQuotaPrivilege` and, for a different unrestricted primary token, `SeAssignPrimaryTokenPrivilege`. Merely being a member of Administrators does not guarantee that the latter privilege is present in the current token; service/System contexts commonly have it. `sysperm` reports `ERROR_PRIVILEGE_NOT_HELD` explicitly instead of silently falling back to PowerShell, `runas`, or another mechanism.
+When `-p` is omitted, `exec` uses the same stable machine password printed by `sysperm pwd`. Supplying `-p` without a following password explicitly selects the empty string. On Windows, `sysperm` uses native Windows APIs (`LogonUserW`, `DuplicateTokenEx`, and `CreateProcessAsUserW`) and waits for the child, propagating its exit code. Standard input/output/error handles are inherited, so ordinary redirection around `sysperm` is also inherited by the launched process. Windows alternate-user process creation requires the caller token to hold the privileges required by `CreateProcessAsUserW`, notably `SeIncreaseQuotaPrivilege` and, for a different unrestricted primary token, `SeAssignPrimaryTokenPrivilege`. Merely being a member of Administrators does not guarantee that the latter privilege is present in the current token; service/System contexts commonly have it. `sysperm` reports `ERROR_PRIVILEGE_NOT_HELD` explicitly instead of silently falling back to PowerShell, `runas`, or another mechanism.
 
 The execution feature intentionally targets local users only; it does not promise generic NSS/LDAP/Active Directory identity resolution.
 
@@ -77,7 +79,7 @@ Named ACLs map to the native platform mechanism:
 - macOS: native ACL support through `chmod`.
 - Windows: `icacls`.
 
-Standard Unix ownership/mode operations use the native `chmod`/`chown` facilities where appropriate.
+Ownership is available directly as `sysperm chown OWNER[:GROUP] PATH`, recursive by default and disableable with `--no-recursive`. Unix maps this to native `chown`; Windows maps the single owner identity form to `icacls /setowner` and rejects the Unix-only `OWNER:GROUP` form.
 
 ## Native account backends
 

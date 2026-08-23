@@ -34,7 +34,8 @@ Commands describe desired state.
 - `user NAME --absent` means ensure it does not exist.
 - `group NAME` means ensure the group exists.
 - `group NAME --absent` means ensure it does not exist.
-- Existing user/group attributes not explicitly supplied by the caller must remain unchanged.
+- Existing user/group attributes not explicitly supplied by the caller must remain unchanged, including an existing user's password when no password option is present.
+- New users without an explicit password use one stable machine password derived from a sysperm-owned random machine secret. `pwd` prints that generated password. `-p`/`-P`/`--password` with no value explicitly means the empty password.
 - A missing group referenced by an ensured user must be created automatically before membership is added.
 - A newly created user gets a same-name primary/private group by default unless explicitly disabled.
 
@@ -42,7 +43,7 @@ Commands describe desired state.
 
 Permission operations are recursive by default.
 
-Support ordinary chmod-style `u`, `g`, `o`, `+`, `-`, and `=` expressions on Unix. Support named users and groups through the extended ACL expression layer and map those semantics to the platform-native ACL utility.
+Support ordinary chmod-style `u`, `g`, `o`, `+`, `-`, and `=` expressions on Unix. Support named users and groups through the extended ACL expression layer and map those semantics to the platform-native ACL utility. `chown` is recursive by default; Unix accepts `OWNER[:GROUP]`, while Windows supports the owner identity through `icacls /setowner`.
 
 On Linux, directory setgid (`g+s`) is enabled by default during recursive permission management so newly created children inherit the directory group. This is distinct from execute/traversal permission. Do not describe setgid itself as traversal.
 
